@@ -1,0 +1,17 @@
+{
+  "name": "ldplayer-via-dsh-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Windows/DSH side of the LDPlayer x Via x ChatGPT bridge: loopback HTTP task queue, token auth, ADB reverse management, CLI tool adapter.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "bin": {
+    "dsh-bridge": "./bin/dsh-bridge.js"
+  },
+  "scripts": {
+    "selftest": "node scripts/selftest.js",
+    "mock-via": "node scripts/mock-via.js",
+    "serve": "node bin/dsh-bridge.js serve --foreground"
+  },
+  "license": "UNLICENSED"
+}

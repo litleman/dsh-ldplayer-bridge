@@ -1,0 +1,15 @@
+{
+  "name": "LDPlayer-Via-DSH-Bridge",
+  "version": "0.1.2",
+  "created": "2026-11-17",
+  "scope": "Via simulator-side prototype and Windows/DSH integration contract",
+  "entrypoint": "via/DSH-GPT-Bridge.user.js",
+  "protocol": "protocol/Bridge_API_v1.md",
+  "status": "prototype with standalone network probe; full task queue remains a Windows/DSH implementation",
+  "compatibility": {
+    "via": "7.4.1",
+    "ldplayer": "14"
+  },
+  "diagnostic_entrypoint": "via/DSH-Bridge-Diagnostic.user.js",
+  "diagnostic_server": "windows-reference/bridge_probe_server.py"
+}

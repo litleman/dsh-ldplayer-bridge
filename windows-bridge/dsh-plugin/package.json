@@ -1,0 +1,49 @@
+{
+  "name": "dsh-ldplayer-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "description": "DSH tools for the LDPlayer/Via GPT bridge: send a prompt to ChatGPT running inside the emulator, wait for the reply, install the Via userscript, and inspect bridge health — all from a normal conversation turn.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "ldplayer",
+    "via",
+    "adb",
+    "bridge"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.7-rc.1 || ^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": ">=3.18.4 <4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "cordis.patch.yml"
+    },
+    "engines": {
+      "dsh": ">=0.2.1-rc.2 <0.4.0-0"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "host": "127.0.0.1",
+  "port": 18765,
+  "token": "REPLACE_WITH_OUTPUT_OF_dsh-bridge_token",
+  "adbPath": "D:\\leidian\\LDPlayer14\\adb.exe",
+  "deviceSerial": "emulator-5554",
+  "clientId": "ldplayer-via-main",
+  "userscriptPath": "<repo>\\雷电bridge\\windows-bridge\\via\\DSH-GPT-Bridge.user.js",
+  "diagnosticPath": "<repo>\\雷电bridge\\windows-bridge\\via\\DSH-Bridge-Diagnostic.user.js",
+  "outDir": "<repo>\\雷电bridge\\windows-bridge\\out",
+  "stateFile": "<repo>\\雷电bridge\\windows-bridge\\.state\\state.json",
+  "logFile": "<repo>\\雷电bridge\\windows-bridge\\.state\\bridge.log",
+  "logging": { "taskText": false },
+  "limits": {
+    "maxBodyBytes": 65536,
+    "maxTextChars": 20000,
+    "maxReplyChars": 60000,
+    "maxQueuedTasks": 200,
+    "maxRetainedTasks": 500,
+    "minPollIntervalMs": 200,
+    "defaultTimeoutSeconds": 180,
+    "maxTimeoutSeconds": 900,
+    "leaseSeconds": 300,
+    "maxLeaseAttempts": 2
+  }
+}

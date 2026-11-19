@@ -1,0 +1,16 @@
+# 本机凭据与运行产物
+config.json
+**/config.json
+.state/
+**/.state/
+out/
+**/out/
+logs/
+**/logs/
+
+node_modules/
+*.log
+
+.DS_Store
+Thumbs.db
+~$*

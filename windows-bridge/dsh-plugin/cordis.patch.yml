@@ -1,0 +1,19 @@
+# dsh-ldplayer-bridge：把雷电模拟器里的 Via + ChatGPT 桥接暴露给 DSH。
+#
+# 注册四个工具到 ctx.tools：
+#   gpt_bridge_status      桥、adb reverse、Via 心跳与脚本版本的快照
+#   gpt_send_message       投递一段提示词，由 Via 页面驱动 ChatGPT，等回复后返回
+#   gpt_new_chat           让 ChatGPT 在项目内新开一个对话
+#   gpt_wait_reply         等一个已排队任务的回复
+#   gpt_install_userscript 用 adb 在 Via 里完成用户脚本的安装/更新，并用心跳版本校验
+#
+# 可选配置（都可不填；插件会自己从 dsh-plugin 的上级目录找到 windows-bridge）：
+#   bridgeDir: D:/.../雷电bridge/windows-bridge
+#   defaultTimeoutSeconds: 180
+#   pollIntervalMs: 500
+- insert:
+    - id: ldplayer-bridge
+      name: dsh-ldplayer-bridge
+      config:
+        defaultTimeoutSeconds: 180
+        pollIntervalMs: 500
