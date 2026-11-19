@@ -31,7 +31,9 @@ test('git 不可用：版本打上 untrusted- 前缀，且旧授权一律失效�
     // 就算手里有同版本的 grant，也不许放行写工具。
     const state = stateOf('matrix-untrusted')
     state.enabled = true
-    state.grant = { id: 'g1', version, at: Date.now(), expiresAt: Date.now() + 60000, used: 0 }
+    state.activePlanId = 'plan-m1'
+    state.toolSnapshotDigest = 'snap-m1'
+    state.grant = { id: 'g1', planId: 'plan-m1', version, toolSnapshotDigest: 'snap-m1', at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 300, used: 0 }
     const denied = gateDecision(state, 'write', version, Date.now(), { trusted: false })
     assert.equal(denied.allow, false)
     assert.match(denied.reason, /版本不可信|untrusted/)
@@ -50,7 +52,9 @@ test('git 恢复：版本重新可信，新版本上的授权可以正常放行'
 
   const state = stateOf('matrix-trusted')
   state.enabled = true
-  state.grant = { id: 'g2', version, at: Date.now(), expiresAt: Date.now() + 60000, used: 0 }
+  state.activePlanId = 'plan-m2'
+  state.toolSnapshotDigest = 'snap-m2'
+  state.grant = { id: 'g2', planId: 'plan-m2', version, toolSnapshotDigest: 'snap-m2', at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 300, used: 0 }
   const ok = gateDecision(state, 'write', version, Date.now(), { trusted: true })
   assert.equal(ok.allow, true)
 })
@@ -59,7 +63,9 @@ test('同一会话的两个写操作共享同一批授权，操作数累计到�
   const state = stateOf('matrix-share')
   state.enabled = true
   const version = 'deadbee1'
-  state.grant = { id: 'g3', version, at: Date.now(), expiresAt: Date.now() + 60000, used: 0, maxOps: 2 }
+  state.activePlanId = 'plan-m3'
+  state.toolSnapshotDigest = 'snap-m3'
+  state.grant = { id: 'g3', planId: 'plan-m3', version, toolSnapshotDigest: 'snap-m3', at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 2, used: 0 }
 
   const first = gateDecision(state, 'write', version, Date.now(), { trusted: true })
   const second = gateDecision(state, 'edit', version, Date.now(), { trusted: true })

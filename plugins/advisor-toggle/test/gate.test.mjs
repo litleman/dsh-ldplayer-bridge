@@ -40,8 +40,17 @@ test('门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放�
   assert.match(denied.reason, /advisor_plan/, '拒绝理由要给出第一条出路');
   assert.match(denied.reason, /长按 3 秒/, '拒绝理由要给出应急出路');
 
-  const batch = () => ({ id: 'b1', version: 'v1', at: Date.now(), expiresAt: Date.now() + 60000, used: 0 });
-  const granted = { enabled: true, grant: batch(), version: 'v1' };
+  const batch = () => ({
+    id: 'b1',
+    planId: 'plan-1',
+    version: 'v1',
+    toolSnapshotDigest: 'snap-1',
+    at: Date.now(),
+    expiresAt: Date.now() + 60000,
+    maxOps: 300,
+    used: 0,
+  });
+  const granted = { enabled: true, activePlanId: 'plan-1', toolSnapshotDigest: 'snap-1', grant: batch(), version: 'v1' };
   assert.equal(gateDecision(granted, 'pwsh', 'v1', Date.now(), { trusted: true }).allow, true);
   assert.equal(granted.grant.used, 1, '每次放行都要记一次用量');
   assert.equal(
@@ -60,7 +69,9 @@ test('门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放�
 test('第一批授权过期 / 超额后失效，并说明原因', () => {
   const old = {
     enabled: true,
-    grant: { id: 'b2', version: 'v1', at: 1, expiresAt: Date.now() - 1000, used: 0 },
+    activePlanId: 'plan-1',
+    toolSnapshotDigest: 'snap-1',
+    grant: { id: 'b2', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1', at: 1, expiresAt: Date.now() - 1000, maxOps: 300, used: 0 },
     degradedAt: 0,
   };
   const denied = gateDecision(old, 'pwsh', 'v1');
@@ -70,7 +81,9 @@ test('第一批授权过期 / 超额后失效，并说明原因', () => {
 
   const heavy = {
     enabled: true,
-    grant: { id: 'b3', version: 'v1', at: Date.now(), expiresAt: Date.now() + 60000, used: 300 },
+    activePlanId: 'plan-1',
+    toolSnapshotDigest: 'snap-1',
+    grant: { id: 'b3', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 300, used: 300 },
     degradedAt: 0,
   };
   const over = gateDecision(heavy, 'write', 'v1', Date.now(), { trusted: true });

@@ -61,7 +61,7 @@ test('同一计划内版本漂移放行但标记 granted-drift（残余 TOCTOU �
     enabled: true,
     activePlanId: 'plan-A',
     toolSnapshotDigest: 'snap-1',
-    grant: { id: 'b1', planId: 'plan-A', version: 'v1', expiresAt: Date.now() + 60000, used: 0 },
+    grant: { id: 'b1', planId: 'plan-A', version: 'v1', toolSnapshotDigest: 'snap-1', expiresAt: Date.now() + 60000, maxOps: 10, used: 0 },
   };
   const d = gateDecision(state, 'write', 'v2', Date.now(), { trusted: true });
   assert.equal(d.allow, true);
@@ -102,3 +102,24 @@ test('插件重载（apply）会清空所有会话状态，旧授权不可能跨
   assert.equal(after.enabled, false);
   assert.equal(after.grant, null);
 });
+
+test('授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2）', () => {
+  const base = () => ({ enabled: true, grant: null, activePlanId: 'plan-A', toolSnapshotDigest: 'snap', degradedAt: 0, deniedStreak: 0, lastFailureAt: 0 })
+  const grantWith = (patch) => ({ id: 'g', planId: 'plan-A', version: 'v1', digest: 'd', toolSnapshotDigest: 'snap', at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 10, used: 0, round: 1, ...patch })
+  const run = (statePatch, grantPatch) => { const s = { ...base(), ...statePatch }; s.grant = grantWith(grantPatch); return gateDecision(s, 'write', 'v1', Date.now(), { trusted: true }).allow }
+
+  assert.equal(run({}, {}), true, '完整字段应放行')
+  assert.equal(run({}, { expiresAt: 0 }), false, '缺 expiresAt 必须拒绝（不能永不过期）')
+  assert.equal(run({}, { planId: '' }), false, '缺 planId 必须拒绝')
+  assert.equal(run({ activePlanId: '' }, {}), false, 'state 缺 activePlanId 必须拒绝')
+  assert.equal(run({}, { toolSnapshotDigest: '' }), false, '缺 toolSnapshotDigest 必须拒绝')
+  assert.equal(run({ toolSnapshotDigest: '' }, {}), false, 'state 缺 toolSnapshotDigest 必须拒绝')
+})
+
+test('makeGrant 拒绝缺失绑定字段，且总带合法 expiresAt', () => {
+  const state = { toolSnapshotDigest: 'snap', planDigest: 'pd' }
+  assert.throws(() => makeGrant({ state, version: 'v1', planId: '', round: 1 }), /planId/)
+  assert.throws(() => makeGrant({ state: { planDigest: 'pd' }, version: 'v1', planId: 'plan-A', round: 1 }), /toolSnapshotDigest/)
+  const g = makeGrant({ state, version: 'v1', planId: 'plan-A', round: 1 })
+  assert.ok(g.expiresAt > g.at, 'expiresAt 必须晚于 at')
+})

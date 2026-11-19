@@ -613,19 +613,43 @@ async function review(ctx, exec, phase, message) {
 const randomId = (bytes = 8) => randomBytes(bytes).toString('hex')
 const sha256 = (text) => createHash('sha256').update(text).digest('hex')
 
+// 工具快照摘要：授权绑它，工具集一变（装了新工具/插件重载）授权即失效。
+// 拿不到工具表时退化成固定标记而不是空串——空串会被 fail-closed 校验当成"缺绑定字段"，
+// 让合法批次也进不来；固定标记则安全（所有空快照彼此相等，但换工具集就会变）。
+const ADVISOR_ONLY_SNAPSHOT = sha256('advisor-only')
+async function toolSnapshotOf(ctx) {
+  try {
+    const tools = ctx?.get?.('tools')
+    if (typeof tools?.list !== 'function') return ADVISOR_ONLY_SNAPSHOT
+    const list = await tools.list()
+    const names = (Array.isArray(list) ? list : []).map((item) => String(item?.name || '')).filter(Boolean).sort()
+    if (names.length === 0) return ADVISOR_ONLY_SNAPSHOT
+    return sha256(names.join(','))
+  } catch {
+    return ADVISOR_ONLY_SNAPSHOT
+  }
+}
+
 // 一批活的授权：绑计划号、绑版本、有过期时间、有操作计数。
 // 完整 64 位 SHA-256 作摘要（对抗评审要求授权摘要不许截断）。
 function makeGrant({ state, version, planId, round }) {
+  // 授权必须绑死在"某个计划 + 某个工具快照"上：缺字段直接拒绝盖章，
+  // 不能让 gateDecision 事后拿"字段缺失 = 无需比较"蒙混过去（对抗评审 HIGH-1）。
+  if (!planId) throw new Error('makeGrant: planId 不能为空')
+  const snapshot = String(state.toolSnapshotDigest || '')
+  if (!snapshot) throw new Error('makeGrant: toolSnapshotDigest 不能为空')
   const at = Date.now()
   const digest = sha256(`${planId}\0${version}\0${at}\0${state.planDigest}`)
+  const ttl = Number(DEFAULTS.grantTtlMs || 30 * 60 * 1000)
+  if (!Number.isFinite(ttl) || ttl <= 0) throw new Error('makeGrant: grantTtlMs 非法')
   return {
     id: randomId(8),
     planId,
     version,
     digest,
-    toolSnapshotDigest: state.toolSnapshotDigest || '',
+    toolSnapshotDigest: snapshot,
     at,
-    expiresAt: at + Number(DEFAULTS.grantTtlMs || 30 * 60 * 1000),
+    expiresAt: at + ttl,
     maxOps: Number(DEFAULTS.maxOpsPerGrant || 300),
     used: 0,
     round,
@@ -711,6 +735,9 @@ async function reviewLocked(ctx, exec, sessionId, state, phase, message) {
     }
     state.activePlanId = planId
     state.planDigest = sha256(`${phase}\0${message}\0${version}`)
+    // 工具快照是授权的绑定项：toggle 开的时候已经取过，重启/测试路径可能为空，这里补取一次。
+    // 取不到时 toolSnapshot() 会退化成固定标记（而不是空串），保证 makeGrant 的 fail-closed 校验不被绕过。
+    if (!state.toolSnapshotDigest) state.toolSnapshotDigest = await toolSnapshotOf(ctx)
     state.grant = makeGrant({ state, version, planId, round: state.round })
     state.grantExpired = ''
     await log(
@@ -809,16 +836,15 @@ function gateDecision(state, name, currentVersion, now = Date.now(), { trusted =
   // 工具集变过，任一命中都失效（对抗评审 HIGH-1 / P0）。
   if (state.grant) {
     const g = state.grant
-    const expired = g.expiresAt && now > g.expiresAt
+    // 字段缺失一律按"不匹配"处理（fail-closed）：绝不能因为某个字段没写就跳过比较。
+    const expired = !g.expiresAt || now > g.expiresAt
     // 额度可以按批次覆盖（测试与将来调参用），默认取配置值。
     const maxOps = Number(g.maxOps || DEFAULTS.maxOpsPerGrant || 300)
     const overOps = Number(g.used || 0) >= maxOps
     // grant 必须属于当前计划：否则「上一批活的授权」会被拿来放行新一批活。
-    const planMismatch = Boolean(g.planId && state.activePlanId && g.planId !== state.activePlanId)
+    const planMismatch = !g.planId || !state.activePlanId || g.planId !== state.activePlanId
     // 工具集变过（插件重载 / 装了新工具）：授权不认新工具。
-    const snapshotMismatch = Boolean(
-      g.toolSnapshotDigest && state.toolSnapshotDigest && g.toolSnapshotDigest !== state.toolSnapshotDigest,
-    )
+    const snapshotMismatch = !g.toolSnapshotDigest || !state.toolSnapshotDigest || g.toolSnapshotDigest !== state.toolSnapshotDigest
     if (!expired && !overOps && trusted && !planMismatch && !snapshotMismatch) {
       g.used = Number(g.used || 0) + 1
       const drift = Boolean(g.version && currentVersion && g.version !== currentVersion)
@@ -888,17 +914,7 @@ export function apply(ctx, rawConfig = {}) {
   sessions.clear()
 
   const tools = ctx.get?.('tools')
-  // 工具快照摘要：授权绑它，工具集一变（装了新工具/插件重载）授权即失效。
-  const toolSnapshot = async () => {
-    try {
-      if (typeof tools?.list !== 'function') return sha256('advisor-only')
-      const list = await tools.list()
-      const names = (Array.isArray(list) ? list : []).map((item) => String(item?.name || '')).filter(Boolean).sort()
-      return sha256(names.join(','))
-    } catch {
-      return ''
-    }
-  }
+  const toolSnapshot = () => toolSnapshotOf(ctx)
   if (tools?.register) {
     ctx.effect(() =>
       tools.register(
