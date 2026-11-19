@@ -114,3 +114,10 @@ test('客户端不再通过 useSessions 扫 byId 找会话', () => {
   assert.ok(!/props\.useSessions/.test(SOURCE), '不应再依赖 useSessions 兜底');
   assert.ok(/props\.sessionId/.test(SOURCE));
 });
+
+test('未配置 workspace 时按钮标出配置异常并且不切换（不许静默失效）', () => {
+  assert.ok(/data-config/.test(SOURCE), '按钮需要 data-config 标记');
+  assert.ok(/workspaceState !== 'ready'/.test(SOURCE), '需要从 /state 读 workspaceState');
+  assert.ok(/if \(misconfigured\) return/.test(SOURCE), '配置不可用时点击不切开关');
+  assert.ok(/DSH_WORKSPACE/.test(SOURCE), '提示里要写清怎么配');
+});
