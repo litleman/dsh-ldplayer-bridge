@@ -208,6 +208,10 @@ lines.push(`OVERALL: ${failed ? 'FAIL' : 'PASS'}`)
 lines.push(`(# pass ${passLine.replace('# pass ', '')} / # fail ${failLine.replace('# fail ', '')})`)
 
 await writeFile(EVIDENCE, lines.join('\n'), 'utf8')
+// 分发副本也留一份同一份报告：顾问看的是公开仓库 HEAD，两边内容必须一致，
+// 否则"证据在源码树、分发树里是旧的"这种不一致本身就是交付缺陷。
+const DIST_EVIDENCE = join(DIST_DIR, 'docs', 'dist-evidence.txt')
+await writeFile(DIST_EVIDENCE, lines.join('\n'), 'utf8').catch(() => {})
 await rm(sandbox, { recursive: true, force: true })
 console.log(lines.slice(-2).join('\n'))
 console.log(`evidence: ${EVIDENCE} (${(await stat(EVIDENCE)).size} bytes)`)
