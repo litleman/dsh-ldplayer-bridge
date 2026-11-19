@@ -1,0 +1,25 @@
+# advisor-toggle：输入框左侧的「顾问开关」胶囊（slot: conversation.input.left, order 30）。
+# 装上即出现；开关按会话独立保存，默认关闭。默认配置里**不含任何机器绝对路径**，
+# 目的：别人 clone 下来就能装，只有"未配置 workspace"这一种可解释的初始状态。
+- insert:
+    - id: advisor-toggle
+      name: 'advisor-toggle'
+      config:
+        # 受保护写入的归属目录。留空 = 未配置（门禁会拒绝一切非只读工具，并提示怎么配）。
+        # 也可以不写这里，改设环境变量 DSH_WORKSPACE。
+        workspace: ''
+        # 桥地址。留空用 http://127.0.0.1:18765。
+        bridgeUrl: ''
+        # 桥配置（token 在这里）。留空用 <workspace>/雷电bridge/windows-bridge/config.json。
+        bridgeConfigPath: ''
+        # 顾问笔记落地目录。留空用 <workspace>/gpt-notes。
+        notesDir: ''
+        # 一次 GO 授权的有效期与用量上限。
+        grantTtlMs: 1800000
+        maxOpsPerGrant: 300
+        # block=顾问不可达时 fail-closed（默认）；degrade=降级放行并记账。
+        onAdvisorUnreachable: block
+        # 浏览器半是否必须带 /hello 注册过的 nonce：调试默认 false，正式部署建议 true。
+        requireClientNonce: false
+        autoRecover: true
+        deliveryReminder: true

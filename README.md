@@ -73,6 +73,25 @@ plugin_manager set_bundle target="dsh-ldplayer-bridge" enabled=true
 - ChatGPT Web 的 DOM 是虚拟化的，滚动会卸载旧消息，因此不能用 `innerText` 长度推断上下文占用；只能靠页面自报的额度提示。
 - 目前只针对 ChatGPT 网页版；其它站点需要改选择器。
 
+## 顾问开关插件（plugins/advisor-toggle）
+
+仓库里还带了一个可选的 DSH 插件：在输入框左侧加一枚「顾问」胶囊，打开后每次动手前/交付前都要先过 ChatGPT 评审（通过雷电桥发送），没拿到 `VERDICT: GO` 就拦下非只读工具。
+
+- **位置**：`conversation.input.left`，order 30（在「AI 控制电脑」右侧、模型选择器左侧）。
+- **安装**：
+  ```
+  plugin_manager install_bundle
+    target: <本仓库路径>/plugins/advisor-toggle
+  ```
+  装完重载一次（`plugin_manager set_bundle target=advisor-toggle enabled=false` 再 `enabled=true`），刷新页面即可看到胶囊。
+- **必配项**：插件**故意不带任何机器路径**，所以首次安装是"未配置 workspace"状态——门禁会拒绝一切非只读工具并提示怎么配。二选一：
+  - 在 profile 的 `cordis.patch.yml` 里覆盖：`- id: advisor-toggle` + `config: { workspace: <你的工作区绝对路径> }`；
+  - 或设置环境变量 `DSH_WORKSPACE`。
+  桥地址默认 `http://127.0.0.1:18765`，token 从 `<workspace>/雷电bridge/windows-bridge/config.json` 读（也可用 `DSH_BRIDGE_TOKEN`）。
+- **自检**：`node plugins/advisor-toggle/scripts/selfcheck.mjs --dist`（检查包结构、机器路径残留、配置三态、日志目录兜底；任一失败退出码 1）。
+- **日志**：`%DSH_HOME%\logs\advisor-toggle.log`（`DSH_HOME` 由 Harness 注入；拿不到时退到本机默认目录，再不行退临时目录，绝不因日志失败而启动失败）。
+- **已知边界**：`override`（长按 3 秒应急解除）只证明"某个本机客户端点了它"，不是身份认证；脱敏靠规则命中，不保证覆盖所有写法；交付审核是提醒而非硬拦截。详见 `plugins/advisor-toggle/docs/threat-model.md`。
+
 ## License
 
 MIT
