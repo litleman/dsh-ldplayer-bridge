@@ -176,10 +176,14 @@ record(`node --test (${testFiles.length} files)`, {
   result: test.code === 0 && failLine === '0' ? 'PASS' : 'FAIL',
 })
 
-// ---- G. selfcheck（工作副本与分发副本） ----
-for (const [label, dir] of [['working copy', PLUGIN_DIR], ['dist copy', DIST_DIR]]) {
-  const sc = run(process.execPath, ['scripts/selfcheck.mjs', '--dist'], dir)
-  record(`selfcheck --dist (${label})`, { cwd: dir, exit: sc.code, stdout: sc.stdout, stderr: sc.stderr, result: sc.code === 0 ? 'PASS' : 'FAIL' })
+// ---- G. selfcheck（工作副本：普通模式；分发副本：--dist --root 指向自己） ----
+// 分发副本必须显式传 --root，否则 --dist 会退回源码目录，等于没验证独立产物（P0-2）。
+for (const [label, dir, extra] of [
+  ['working copy', PLUGIN_DIR, []],
+  ['dist copy', DIST_DIR, ['--dist', '--root', DIST_DIR, '--source', PLUGIN_DIR]],
+]) {
+  const sc = run(process.execPath, ['scripts/selfcheck.mjs', ...extra], dir)
+  record(`selfcheck ${extra.length ? '--dist --root' : ''} (${label})`.replace('  ', ' '), { cwd: dir, exit: sc.code, stdout: sc.stdout, stderr: sc.stderr, result: sc.code === 0 ? 'PASS' : 'FAIL' })
 }
 
 // ---- 输出 ----

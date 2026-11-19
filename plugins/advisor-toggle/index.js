@@ -619,9 +619,13 @@ const sha256 = (text) => createHash('sha256').update(text).digest('hex')
 // 关键区分（对抗评审 HIGH-3）："工具表读不到"不等于"工具集就是空的"。
 // 读不到时返回 trusted=false，调用方必须据此拒绝签发写授权——不能拿固定标记冒充可信快照。
 const ADVISOR_ONLY_SNAPSHOT = sha256('advisor-only')
+// tools 服务在 apply() 的上下文里拿得到，但在「工具执行上下文」里拿不到；
+// 昨天那版只从执行上下文取，结果签授权时 trusted 恒为 false → 门禁自锁（日志 grant-refused reason=no-tools-service）。
+// 这里缓存一份 apply 时拿到的手柄，执行上下文取不到就退回它。
+let HOST_TOOLS = null
 async function toolSnapshotOf(ctx) {
   try {
-    const tools = ctx?.get?.('tools')
+    const tools = ctx?.get?.('tools') || HOST_TOOLS
     if (typeof tools?.list !== 'function') return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: 'no-tools-service' }
     const list = await tools.list()
     const names = (Array.isArray(list) ? list : []).map((item) => String(item?.name || '')).filter(Boolean).sort()
@@ -969,6 +973,7 @@ export function apply(ctx, rawConfig = {}) {
   sessions.clear()
 
   const tools = ctx.get?.('tools')
+  HOST_TOOLS = tools && typeof tools.list === 'function' ? tools : null
   if (tools?.register) {
     ctx.effect(() =>
       tools.register(

@@ -5,7 +5,8 @@ import { mkdtemp, cp, rm, readFile, writeFile } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { scanText, scanPlugin, runSelfcheck } from '../scripts/selfcheck.mjs'
+import { execFile } from 'node:child_process'
+import { scanText, scanPlugin, runSelfcheck, SCAN_TARGETS } from '../scripts/selfcheck.mjs'
 
 const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -88,7 +89,48 @@ test('README.md 在扫描范围内（植入即失败）', async () => {
   }
 })
 
-test('分发模式检查必需文件与入口语法', async () => {
-  const result = await runSelfcheck({ root: PLUGIN_DIR, dist: true })
-  assert.equal(result.ok, true, result.problems.join('\n'))
+test('config.js 也在扫描目标内（P0-1 回归：植入路径必须失败）', async () => {
+  assert.ok(SCAN_TARGETS.includes('config.js'), 'SCAN_TARGETS 必须包含 config.js')
+  const copy = await mkdtemp(join(tmpdir(), 'adv-scan-'))
+  const target = join(copy, 'plugin')
+  try {
+    await cp(PLUGIN_DIR, target, { recursive: true, filter: (src) => !/[\\/](gpt-notes|node_modules|\.git)([\\/]|$)/.test(src) })
+    const file = join(target, 'config.js')
+    const text = await readFile(file, 'utf8')
+    await writeFile(file, `${text}\n// ${String.raw`D:\Administrator\allWorkFiles\ds-workspace`}\n`)
+    const scan = await scanPlugin(target)
+    assert.ok(scan.hits.some((hit) => hit.file === 'config.js'), 'config.js 里的机器路径必须被扫到')
+    assert.equal((await runSelfcheck({ root: target })).ok, false)
+  } finally {
+    await rm(copy, { recursive: true, force: true })
+  }
+})
+
+test('分发模式：独立副本通过，源码目录被拒绝，缺 --root 直接失败（P0-2 回归）', async () => {
+  const copy = await mkdtemp(join(tmpdir(), 'adv-dist-'))
+  const target = join(copy, 'dist')
+  try {
+    await cp(PLUGIN_DIR, target, { recursive: true, filter: (src) => !/[\\/](gpt-notes|node_modules|\.git)([\\/]|$)/.test(src) })
+    const fromCopy = await runSelfcheck({ root: target, dist: true, sourceDir: PLUGIN_DIR })
+    assert.equal(fromCopy.ok, true, fromCopy.problems.join('\n'))
+
+    const fromSource = await runSelfcheck({ root: PLUGIN_DIR, dist: true, sourceDir: PLUGIN_DIR })
+    assert.equal(fromSource.ok, false, '--dist 指向源码目录必须失败')
+    assert.ok(fromSource.problems.some((problem) => problem.startsWith('dist-root-same-as-source')), fromSource.problems.join('\n'))
+
+    // 在分发副本里跑时脚本自身位置就是副本，不能拿它当"源码目录"——必须显式给 --source，否则拒判。
+    const noSource = await runSelfcheck({ root: target, dist: true })
+    assert.equal(noSource.ok, false)
+    assert.ok(noSource.problems.some((problem) => problem.startsWith('source-root-unknown')), noSource.problems.join('\n'))
+  } finally {
+    await rm(copy, { recursive: true, force: true })
+  }
+})
+
+test('CLI：--dist 不带 --root 直接退出码 2', async () => {
+  const script = join(PLUGIN_DIR, 'scripts', 'selfcheck.mjs')
+  const code = await new Promise((resolveCode) => {
+    execFile(process.execPath, [script, '--dist'], (error) => resolveCode(error ? error.code : 0))
+  })
+  assert.equal(code, 2)
 })

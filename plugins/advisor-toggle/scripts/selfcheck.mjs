@@ -1,13 +1,17 @@
 #!/usr/bin/env node
-// 自检：证明"这个包装到别人机器上不会指回我的机器"。
+// 自检：证明"这个包装到别人机器上不会指回我的机器"，并且证明「验的是独立分发副本」。
 // 不 import 入口（apply 有副作用），只做静态扫描 + 配置行为 + 分发完整性检查。
-import { readFile, readdir, stat, mkdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, relative } from 'node:path'
+import { readFile, readdir, realpath, stat, mkdir, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { dirname, isAbsolute, join, relative, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { resolveConfig, resolveHome } from '../config.js'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url)).replace(/[\\/]scripts$/, '')
+
+// 要被扫描「机器绝对路径」的运行时代码与配置：与 checkDist() 的必需文件集同源，避免两处漂移。
+export const SCAN_TARGETS = ['index.js', 'config.js', 'client.js', 'cordis.patch.yml', 'package.json', 'README.md']
 
 // 四条独立正则：单反斜杠盘符、POSIX 用户目录、UNC、本机 DSH_HOME。
 // UNC 必须带主机名（\\server\share），否则 `[\\/:*?"<>|]` 这类 JS 转义会被误判成路径。
@@ -17,6 +21,92 @@ export const PATTERNS = [
   { name: 'unc', re: /\\\\[A-Za-z0-9._-]+\\[A-Za-z0-9._-]+/ },
   { name: 'dsh-home', re: /DeepSeekHarness[\\/](database|logs)/i },
 ]
+
+// ── 路径判定（顾问 GO 里点名的实现要求） ───────────────────────────────────────
+
+// 扩展长度前缀 \\?\C:\x → C:\x；\\?\UNC\server\share → \\server\share。
+// 只做规范化，不能因为"去掉前缀了"就认为安全——边界判定统一走 isInsideNormalized。
+export function stripExtendedPath(input) {
+  const text = String(input || '')
+  if (!text.startsWith('\\\\?\\')) return text
+  const rest = text.slice(4)
+  if (/^UNC\\/i.test(rest)) return `\\\\${rest.slice(4)}`
+  return rest
+}
+
+// 驱动器相对路径（C:foo、C:..\outside）不是绝对路径，一律拒绝当 workspace 或 candidate。
+export function isDriveRelative(input) {
+  return /^[A-Za-z]:(?![\\/])/.test(String(input || ''))
+}
+
+export function isWindows() {
+  return process.platform === 'win32'
+}
+
+// 平台化比较键：Windows 大小写不敏感、分隔符统一；POSIX 保持原样。
+function compareKey(input) {
+  const text = stripExtendedPath(input)
+  if (!isWindows()) return text
+  return text.replace(/\//g, '\\').toLowerCase()
+}
+
+// UNC 共享根：\\server\share。不同共享根之间不能互为子目录。
+function uncRoot(input) {
+  const hit = /^\\\\([^\\]+)\\([^\\]+)/.exec(stripExtendedPath(input))
+  return hit ? `\\\\${hit[1]}\\${hit[2]}` : ''
+}
+
+// 纯字符串的边界判定（调用方必须已经 realpath 过）。
+// 不用 startsWith：`C:\work` 不能匹配 `C:\workspace-escape\x`。
+export function isInsideNormalized(root, candidate) {
+  const a = String(root || '')
+  const b = String(candidate || '')
+  if (!a || !b) return false
+  if (!isAbsolute(stripExtendedPath(a)) || !isAbsolute(stripExtendedPath(b))) return false
+  if (isDriveRelative(a) || isDriveRelative(b)) return false
+  const rootUnc = uncRoot(a)
+  const candUnc = uncRoot(b)
+  if (rootUnc && candUnc && compareKey(rootUnc) !== compareKey(candUnc)) return false
+  const rel = relative(stripExtendedPath(a), stripExtendedPath(b))
+  if (rel === '') return true
+  if (isAbsolute(rel)) return false
+  const first = rel.split(/[\\/]/)[0]
+  if (first === '..') return false
+  // 兜底：分隔符边界（不同卷时 relative() 会返回绝对路径，上面已拦）。
+  const keyRoot = compareKey(a).replace(/[\\/]+$/, '')
+  const keyCand = compareKey(b)
+  return keyCand === keyRoot || keyCand.startsWith(`${keyRoot}\\`)
+}
+
+// 目标可能还不存在（gpt-notes 目录、config.json 文件）：沿最近存在的祖先 realpath 后再拼回剩余段，
+// 免得"文件还没建"被误判成"逃出 workspace"。符号链接仍然按真实目标解析。
+export async function realpathLoose(input) {
+  const original = resolve(stripExtendedPath(input))
+  let current = original
+  const tail = []
+  for (let guard = 0; guard < 64; guard += 1) {
+    try {
+      const real = await realpath(current)
+      return tail.length ? join(real, ...tail.reverse()) : real
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) return original
+      tail.push(basename(current))
+      current = parent
+    }
+  }
+  return original
+}
+
+// 走真实路径：符号链接/junction 必须按实际目标判定。
+export async function isInside(root, candidate) {
+  const rootReal = await realpathLoose(root)
+  const candReal = await realpathLoose(candidate)
+  // 根本身必须真实存在，否则"内部"没有意义。
+  const rootExists = await stat(rootReal).then((info) => info.isDirectory()).catch(() => false)
+  if (!rootExists) return false
+  return isInsideNormalized(rootReal, candReal)
+}
 
 export function scanText(text, file = '') {
   const hits = []
@@ -30,7 +120,7 @@ export function scanText(text, file = '') {
 }
 
 async function listScanTargets(root) {
-  const targets = ['index.js', 'client.js', 'cordis.patch.yml', 'package.json', 'README.md']
+  const targets = [...SCAN_TARGETS]
   const localeDir = join(root, 'locale')
   targets.push(...(await collect(localeDir, 'locale')).map((rel) => rel))
   return targets
@@ -85,7 +175,7 @@ async function checkStructure(root) {
   const exp = pkg.exports || {}
   for (const key of ['.', './client', './icon']) if (!exp[key]) problems.push(`package.json: exports 缺 ${key}`)
   if (!exp['./locale/*.json']) problems.push('package.json: exports 缺 ./locale/*.json')
-  for (const rel of ['index.js', 'client.js', 'cordis.patch.yml', 'locale/zh.json', 'locale/en.json']) {
+  for (const rel of ['index.js', 'config.js', 'client.js', 'cordis.patch.yml', 'locale/zh.json', 'locale/en.json']) {
     const info = await stat(join(root, rel)).catch(() => null)
     if (!info) problems.push(`缺少文件：${rel}`)
   }
@@ -109,6 +199,8 @@ async function checkConfigBehavior() {
   const problems = []
   const base = join(tmpdir(), `adv-selfcheck-${Date.now().toString(36)}`)
   await mkdir(join(base, 'ws'), { recursive: true })
+  // 同名前缀的兄弟目录：`ws-escape` 不能被当成 `ws` 的内部（startsWith 会误判）。
+  await mkdir(join(base, 'ws-escape'), { recursive: true })
   const blankEnv = { DSH_HOME: join(base, 'home') }
   try {
     const unconfigured = await resolveConfig({ workspace: '', bridgeConfigPath: '' }, blankEnv)
@@ -120,11 +212,21 @@ async function checkConfigBehavior() {
 
     const ready = await resolveConfig({ workspace: join(base, 'ws') }, blankEnv)
     if (ready.workspace.state !== 'ready') problems.push(`临时目录应判为 ready，实际 ${ready.workspace.state}: ${ready.workspace.reason}`)
-    // 用解析后的真实路径比较：临时目录可能是 8.3 短名，realpath 会展开成长名。
-    const root = (ready.workspace.path || '').toLowerCase()
-    const under = (value) => root !== '' && String(value || '').toLowerCase().startsWith(root)
-    if (!under(ready.workspace.notesDir)) problems.push('notesDir 未落在 workspace 内')
-    if (!under(ready.workspace.bridgeConfigPath)) problems.push('bridgeConfigPath 未落在 workspace 内')
+    // 用解析后的真实路径做边界判断：临时目录可能是 8.3 短名，realpath 会展开成长名。
+    const rootReal = await realpath(ready.workspace.path).catch(() => '')
+    if (!rootReal) problems.push('workspace realpath 解析失败')
+    const insideChecks = [
+      ['notesDir', ready.workspace.notesDir],
+      ['bridgeConfigPath', ready.workspace.bridgeConfigPath],
+    ]
+    for (const [label, value] of insideChecks) {
+      const ok = await isInside(rootReal || ready.workspace.path, value)
+      if (!ok) problems.push(`${label} 未落在 workspace 内（实际 ${value}）`)
+    }
+    // 兄弟前缀目录必须被拒绝（回归 P1-1）。
+    if (isInsideNormalized(rootReal || ready.workspace.path, join(base, 'ws-escape', 'notes'))) {
+      problems.push('同名前缀兄弟目录被误判为 workspace 内部（路径边界判断失效）')
+    }
     if (ready.bridge.state !== 'unconfigured') problems.push(`没有桥配置时 bridgeState=${ready.bridge.state}（应为 unconfigured）`)
   } finally {
     await rm(base, { recursive: true, force: true }).catch(() => {})
@@ -152,8 +254,18 @@ async function checkHome() {
   return problems
 }
 
-async function checkDist(root) {
+// --dist 必须验「独立分发目录」：不能退回源码目录，否则等于什么也没证明。
+// 源码目录不能靠 import.meta.url 推断——在分发副本里运行时它就是副本自己（这正是 P0-2 的复现路径），
+// 所以要求显式 --source 指向源码树；没给就判失败，不许猜。
+async function checkDist(root, sourceDir) {
   const problems = []
+  if (!sourceDir) return { problems: ['source-root-unknown: --dist 需要 --source 指向源码目录，不能用脚本自身位置推断'] }
+  const sourceReal = await realpath(sourceDir).catch(() => '')
+  const distReal = await realpath(root).catch(() => '')
+  if (!distReal) problems.push(`dist-root-unreadable:${root}`)
+  else if (sourceReal && compareKey(sourceReal) === compareKey(distReal)) {
+    problems.push('dist-root-same-as-source: --root 指向了源码目录，没有验证独立产物')
+  }
   for (const rel of ['index.js', 'client.js', 'config.js', 'cordis.patch.yml', 'package.json', 'locale/zh.json', 'icon.svg', 'README.md']) {
     const info = await stat(join(root, rel)).catch(() => null)
     if (!info) problems.push(`分发目录缺必需文件：${rel}`)
@@ -161,18 +273,17 @@ async function checkDist(root) {
   if (problems.length === 0) {
     problems.push(...(await checkStructure(root)))
     // 入口只做语法检查（node --check 语义），绝不 import：apply 会注册工具、清授权、连桥。
-    const { execFile } = await import('node:child_process')
     for (const rel of ['index.js', 'client.js', 'config.js']) {
-      const result = await new Promise((resolve) => {
-        execFile(process.execPath, ['--check', join(root, rel)], (error, _stdout, stderr) => resolve({ ok: !error, stderr }))
+      const result = await new Promise((resolveCheck) => {
+        execFile(process.execPath, ['--check', join(root, rel)], (error, _stdout, stderr) => resolveCheck({ ok: !error, stderr }))
       })
       if (!result.ok) problems.push(`语法检查失败：${rel} ${String(result.stderr || '').slice(0, 200)}`)
     }
   }
-  return problems
+  return { problems, distReal, sourceReal }
 }
 
-export async function runSelfcheck({ root = PLUGIN_DIR, dist = false } = {}) {
+export async function runSelfcheck({ root = PLUGIN_DIR, dist = false, sourceDir = '' } = {}) {
   const problems = []
   problems.push(...(await checkStructure(root)))
   const scan = await scanPlugin(root)
@@ -180,15 +291,39 @@ export async function runSelfcheck({ root = PLUGIN_DIR, dist = false } = {}) {
   for (const hit of scan.hits) problems.push(`机器绝对路径：${hit.file}:${hit.line} [${hit.pattern}] ${hit.text}`)
   problems.push(...(await checkConfigBehavior()))
   problems.push(...(await checkHome()))
-  if (dist) problems.push(...(await checkDist(root)))
-  return { ok: problems.length === 0, problems, hits: scan.hits.length }
+  let distReal = ''
+  if (dist) {
+    const checked = await checkDist(root, sourceDir)
+    problems.push(...checked.problems)
+    distReal = checked.distReal || ''
+  }
+  return { ok: problems.length === 0, problems, hits: scan.hits.length, distReal }
+}
+
+function argValue(argv, name) {
+  const index = argv.findIndex((item) => item === name || item.startsWith(`${name}=`))
+  if (index < 0) return ''
+  const hit = argv[index]
+  if (hit.includes('=')) return hit.slice(hit.indexOf('=') + 1)
+  const next = argv[index + 1]
+  return next && !next.startsWith('--') ? next : ''
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const dist = process.argv.includes('--dist')
-  const root = dist ? PLUGIN_DIR : PLUGIN_DIR
-  const result = await runSelfcheck({ root, dist })
+  const argv = process.argv.slice(2)
+  const dist = argv.includes('--dist')
+  const rootArg = argValue(argv, '--root')
+  const sourceArg = argValue(argv, '--source')
+  if (dist && !rootArg) {
+    console.log('selfcheck: FAILED (--dist 需要 --root 指向独立分发目录，不允许退回源码目录)')
+    process.exit(2)
+  }
+  const root = rootArg ? resolve(rootArg) : PLUGIN_DIR
+  const sourceDir = sourceArg ? resolve(sourceArg) : PLUGIN_DIR
+  const result = await runSelfcheck({ root, dist, sourceDir })
   console.log(`selfcheck: ${result.ok ? 'OK' : 'FAILED'} (pattern hits: ${result.hits})`)
+  console.log(`  root: ${root}`)
+  if (dist) console.log(`  dist realpath: ${result.distReal || '(unresolved)'}  source: ${sourceDir}`)
   for (const problem of result.problems) console.log(`  - ${problem}`)
   process.exitCode = result.ok ? 0 : 1
 }
