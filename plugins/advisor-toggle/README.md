@@ -123,6 +123,10 @@
 30. 顾问评审路径把原文直接外发（含工作区绝对路径、命令输出、token）：审计路径有脱敏、评审路径没有，等于两个强度 → 现在两条路径共用 `REDACT_RULES`（`redact-v3-advisor`：`X-DSH-Token`/`Authorization`/`Bearer`/JSON 敏感字段/YAML 字段/`%USERPROFILE%` 个人目录/40 位以上高熵串），命中数写进消息头与日志 `advisor:redact`；复检 `RESIDUAL_PATTERNS` 有残留就抛错拒发（fail-closed），不发"脱敏后照样发"。
 31. `versionTrusted=false` 可能长期自锁：git 不可用时授权一律失效 → 保留 fail-closed（不可信版本不能复用旧授权），但 `contentVersion()` 每次调用都重算，git 恢复后自动回到可信、重新 plan 即可拿新批次；拒绝理由会写明「版本不可信」。仍不可信时用户可长按 3 秒应急解除，不必关掉整个方案。
 
+32. 授权用的工具快照在「工具执行上下文」里取不到 `tools` 服务 → 签授权时恒判不可信，门禁自锁（日志 `advisor:grant-refused reason=no-tools-service`）。现在**只记住 apply 时的宿主上下文**，每次现取 `ctx.get('tools')`：宿主在同一上下文里替换服务，下一次解析立刻看到新服务（真实 Cordis 验证，`test/c2-real-cordis.test.mjs` C2），执行上下文里的旧服务一律不采用（`test/p0.test.mjs` C4）。卸载清理只清自己那份绑定，不会误清另一个实例（R3）。
+33. 旧版把工具**服务对象**缓存成模块级变量：宿主热替换服务后仍拿旧句柄，等于"工具集不可确认但授权认为已确认"。改为缓存上下文 + 现取服务后，这个旁路消失；同时写前复核（`enforceToolSnapshot()`）每次重新 `list()` 并与授权时的摘要比对，变化/空表/抛错都直接作废本批授权（R2，`test/p0.test.mjs`）。
+34. 工具集合摘要只能证明"名字集合没变"，**证明不了同名工具的实现没被换掉**：这是设计边界，写进 `docs/threat-model.md` 残余风险，不假装能拦。
+
 不修（已知并接受）：
 
 - 交付只是提醒不是硬门禁：DSH 没有「交付」事件可拦，硬拦只能拦工具。

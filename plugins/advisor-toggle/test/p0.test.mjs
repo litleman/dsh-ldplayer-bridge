@@ -139,13 +139,89 @@ test('HIGH-3：读不到真实工具表时不许签发写授权', () => {
   assert.equal(stateOf('p0-untrusted-default').toolSnapshotTrusted, false)
 })
 
-test('HOST_TOOLS：apply 时缓存句柄，卸载时清理（源码级断言）', async () => {
-  const source = await readFile(join(PLUGIN_DIR, 'index.js'), 'utf8')
-  // 缓存来源必须是宿主服务而不是请求参数：只允许从 ctx.get('tools') 取。
-  assert.match(source, /HOST_TOOLS = tools && typeof tools\.list === 'function' \? tools : null/)
-  // 执行上下文取不到时退回缓存，但读不到真表仍然 trusted=false（HIGH-3 语义不放宽）。
-  assert.match(source, /const tools = ctx\?\.get\?\.\('tools'\) \|\| HOST_TOOLS/)
-  assert.match(source, /if \(typeof tools\?\.list !== 'function'\) return \{ digest: ADVISOR_ONLY_SNAPSHOT, trusted: false/)
-  // 生命周期：卸载时必须清空缓存句柄，避免旧服务被当成现役。
-  assert.match(source, /ctx\.effect\(\(\) => \(\) => \{\s*HOST_TOOLS = null\s*\}\)/)
+test('C4：只认宿主上下文里的 tools，且每次现取（旧服务不被采用）', async () => {
+  const { __test } = mod
+  let calls = 0
+  const serviceA = { list: async () => { calls += 1; return [{ name: 'read' }, { name: 'pwsh' }] } }
+  const serviceB = { list: async () => { calls += 1; return [{ name: 'read' }, { name: 'write' }, { name: 'pwsh' }] } }
+  let current = serviceA
+  const host = { get: (name) => (name === 'tools' ? current : undefined) }
+
+  __test.setHostContext(host)
+  try {
+    assert.equal(__test.resolveTools(), serviceA)
+    const first = await __test.toolSnapshotOf()
+    assert.equal(first.trusted, true)
+    // 宿主在同一上下文里替换服务 → 下一次现取必须是新服务，不需要重新 apply。
+    current = serviceB
+    assert.equal(__test.resolveTools(), serviceB)
+    const second = await __test.toolSnapshotOf()
+    assert.equal(second.trusted, true)
+    assert.notEqual(first.digest, second.digest)
+    assert.equal(calls, 2, '每次解析都应重新调用 list()，不允许缓存结果')
+    // 服务被移除 → 立刻回到不可信，不能拿上一份摘要冒充。
+    current = undefined
+    const third = await __test.toolSnapshotOf()
+    assert.equal(third.trusted, false)
+    assert.equal(third.reason, 'no-tools-service')
+  } finally {
+    __test.setHostContext(null)
+  }
+})
+
+test('R2：写前复核工具集——每次写都重取，变了就作废本批授权', async () => {
+  const { __test } = mod
+  const { enforceToolSnapshot } = __test
+  let calls = 0
+  let names = ['read', 'pwsh']
+  let mode = 'ok'
+  const host = {
+    get: (name) => (name === 'tools'
+      ? {
+          list: async () => {
+            calls += 1
+            if (mode === 'throw') throw new Error('tools service exploded')
+            return names.map((n) => ({ name: n }))
+          },
+        }
+      : undefined),
+  }
+  __test.setHostContext(host)
+  try {
+    // 没有授权时不比快照（只读/未开启的路径不该被这里拦）。
+    const noGrant = await enforceToolSnapshot({ grant: null })
+    assert.equal(noGrant.ok, true)
+
+    const stable = await __test.toolSnapshotOf()
+    assert.equal(stable.trusted, true)
+    const state = { grant: { id: 'g1' }, toolSnapshotDigest: stable.digest }
+
+    // 工具集没变：放行，但每次都要重新 list 一次（不是拿旧摘要糊弄）。
+    const ok = await enforceToolSnapshot(state)
+    assert.equal(ok.ok, true)
+    assert.equal(calls, 2, '已经有快照的调用也要重新取一次')
+
+    // 工具集变了：必须拒绝，并标记 changed（调用方据此清 grant）。
+    names = ['read', 'write', 'pwsh']
+    const changed = await enforceToolSnapshot(state)
+    assert.equal(changed.ok, false)
+    assert.equal(changed.changed, true)
+    assert.match(changed.reason, /工具集在授权后发生了变化/)
+
+    // 读不到工具表：同样作废，不许"读不到就放行"。
+    mode = 'throw'
+    const broken = await enforceToolSnapshot(state)
+    assert.equal(broken.ok, false)
+    assert.equal(broken.changed, true)
+    assert.match(broken.reason, /工具集无法确认/)
+
+    // 空表也不可信。
+    mode = 'ok'
+    names = []
+    const empty = await enforceToolSnapshot(state)
+    assert.equal(empty.ok, false)
+    assert.equal(empty.changed, true)
+  } finally {
+    __test.setHostContext(null)
+  }
 })

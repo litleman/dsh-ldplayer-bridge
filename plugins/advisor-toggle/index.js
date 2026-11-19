@@ -619,14 +619,29 @@ const sha256 = (text) => createHash('sha256').update(text).digest('hex')
 // 关键区分（对抗评审 HIGH-3）："工具表读不到"不等于"工具集就是空的"。
 // 读不到时返回 trusted=false，调用方必须据此拒绝签发写授权——不能拿固定标记冒充可信快照。
 const ADVISOR_ONLY_SNAPSHOT = sha256('advisor-only')
-// tools 服务在 apply() 的上下文里拿得到，但在「工具执行上下文」里拿不到；
-// 昨天那版只从执行上下文取，结果签授权时 trusted 恒为 false → 门禁自锁（日志 grant-refused reason=no-tools-service）。
-// 这里缓存一份 apply 时拿到的手柄，执行上下文取不到就退回它。
-let HOST_TOOLS = null
-async function toolSnapshotOf(ctx) {
+// tools 服务在 apply() 的上下文里拿得到，但在「工具执行上下文」里拿不到。
+// 这里**不缓存服务对象**，只记住 apply 时的宿主上下文，每次现取 ctx.get('tools')：
+//  - 宿主若在同一上下文里替换了 tools 服务，下一次解析拿到的是新服务（服务替换即时可见）；
+//  - 不会出现"旧句柄冒充新服务"（缓存句柄正是上一版被否掉的原因）。
+let HOST_CTX = null
+// 绑定宿主上下文，返回清理函数：只有"当前绑定的就是自己"时才清空，
+// 避免多实例/重载时序里 A 的卸载把 B 的引用清掉（对抗评审 R3）。
+function bindHostContext(context) {
+  HOST_CTX = context || null
+  const bound = HOST_CTX
+  return () => {
+    if (HOST_CTX === bound) HOST_CTX = null
+  }
+}
+function resolveTools() {
+  const tools = HOST_CTX?.get?.('tools')
+  return typeof tools?.list === 'function' ? tools : null
+}
+async function toolSnapshotOf() {
   try {
-    const tools = ctx?.get?.('tools') || HOST_TOOLS
-    if (typeof tools?.list !== 'function') return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: 'no-tools-service' }
+    // 只认宿主上下文里的服务；执行上下文里的旧服务一律不采用（对抗评审 C4）。
+    const tools = resolveTools()
+    if (!tools) return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: 'no-tools-service' }
     const list = await tools.list()
     const names = (Array.isArray(list) ? list : []).map((item) => String(item?.name || '')).filter(Boolean).sort()
     if (names.length === 0) return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: 'empty-tool-list' }
@@ -634,6 +649,26 @@ async function toolSnapshotOf(ctx) {
   } catch (error) {
     return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: `tool-list-failed:${error?.message || error}` }
   }
+}
+
+// 写前复核工具集（R2）：授权签的是"当时那份工具表"，每次写都要重新取一次再比，
+// 不允许拿授权时的旧摘要当作现状。变化/读不到 → 作废本批授权并拒绝。
+async function enforceToolSnapshot(state) {
+  // 没有授权就没有要比对的东西：不白跑一次 list()（只读/未开启路径不该被这里拦）。
+  if (!state?.grant) return { ok: true, snapshot: null }
+  const snapshot = await toolSnapshotOf()
+  if (!snapshot.trusted) {
+    return { ok: false, changed: true, snapshot, reason: `工具集无法确认（${snapshot.reason}），本批授权作废` }
+  }
+  if (snapshot.digest !== state.toolSnapshotDigest) {
+    return {
+      ok: false,
+      changed: true,
+      snapshot,
+      reason: '工具集在授权后发生了变化（插件重载/新装或移除工具），本批授权作废',
+    }
+  }
+  return { ok: true, snapshot }
 }
 
 // 一批活的授权：绑计划号、绑版本、有过期时间、有操作计数。
@@ -746,7 +781,7 @@ async function reviewLocked(ctx, exec, sessionId, state, phase, message) {
     // 工具快照是授权的绑定项：每次签发前重新取一次，绝不复用"上次的"快照。
     // HIGH-3：取不到真实工具表（没有 tools 服务 / 列表为空 / 读取抛错）时 → 不签发写授权，
     // 顾问的 GO 只能停留在"方案通过"，不能变成"可以动手"。
-    const snapshot = await toolSnapshotOf(ctx)
+    const snapshot = await toolSnapshotOf()
     state.toolSnapshotDigest = snapshot.digest
     state.toolSnapshotTrusted = snapshot.trusted
     if (!snapshot.trusted) {
@@ -973,12 +1008,8 @@ export function apply(ctx, rawConfig = {}) {
   sessions.clear()
 
   const tools = ctx.get?.('tools')
-  HOST_TOOLS = tools && typeof tools.list === 'function' ? tools : null
-  // 生命周期：插件卸载时必须把缓存句柄清掉，否则宿主换掉 tools 服务后仍可能被旧句柄冒充。
-  // 重载时 apply 会先重新赋值（覆盖旧值），这里补的是"卸载"这一侧。
-  ctx.effect(() => () => {
-    HOST_TOOLS = null
-  })
+  // 生命周期：交给 bindHostContext 管理，只有自己的绑定才允许被自己清空。
+  ctx.effect(() => bindHostContext(ctx))
   if (tools?.register) {
     ctx.effect(() =>
       tools.register(
@@ -1056,6 +1087,23 @@ export function apply(ctx, rawConfig = {}) {
       }
     }
     // 写前复核用「不吃缓存」的版本：缓存过的版本等于把 TOCTOU 窗口放大到 1.5 秒。
+    const enforced = await enforceToolSnapshot(state)
+    if (!enforced.ok) {
+      state.grant = null
+      state.grantExpired = enforced.snapshot?.trusted ? 'tool-snapshot' : 'tool-snapshot-untrusted'
+      state.deniedStreak += 1
+      await log(
+        `host:tool-blocked session=${sessionId} tool=${name} reason=${state.grantExpired} streak=${state.deniedStreak}`,
+      )
+      return {
+        kind: 'deny',
+        reason: [
+          `顾问门禁：${enforced.reason}。`,
+          '两条出路：① 重新调用 advisor_plan 领一批新授权；',
+          '② 点输入框左侧的「顾问已开启」胶囊把它关掉，或长按 3 秒应急解除。',
+        ].join(''),
+      }
+    }
     const currentVersion = await contentVersion({ maxAgeMs: 0 })
     state.version = currentVersion
     const decision = gateDecision(state, name, currentVersion, Date.now(), { trusted: versionTrusted })
@@ -1176,7 +1224,7 @@ export function apply(ctx, rawConfig = {}) {
             if (!state.clientNonce) {
               state.clientNonce = nonce
               state.clientHelloAt = Date.now()
-              const snap = await toolSnapshotOf(ctx)
+              const snap = await toolSnapshotOf()
               state.toolSnapshotDigest = snap.digest
               state.toolSnapshotTrusted = snap.trusted
               await log(
@@ -1224,7 +1272,7 @@ export function apply(ctx, rawConfig = {}) {
               // 新的一轮开关 = 新计划：计划号与工具快照一起重置。
               state.activePlanId = ''
               state.planDigest = ''
-              state.toolSnapshotDigest = (await toolSnapshotOf(ctx)).digest
+              state.toolSnapshotDigest = (await toolSnapshotOf()).digest
               state.toolSnapshotTrusted = false
               state.degradedAt = 0
               state.deniedStreak = 0
@@ -1369,6 +1417,14 @@ export const __test = {
   },
   workspacePath,
   workspaceReady,
+  // 测试注入宿主上下文：C2/C4 用例要在真实/替身上下文里验证"每次现取服务"的语义。
+  resolveTools,
+  setHostContext: (context) => {
+    HOST_CTX = context || null
+  },
+  toolSnapshotOf,
+  enforceToolSnapshot,
+  bindHostContext,
   buildMessage,
   makeGrant,
   nonceIssue,

@@ -53,9 +53,12 @@ async function withSandbox(fn) {
     workspace: { state: 'ready', path: dir, notesDir: join(dir, 'notes'), bridgeConfigPath: join(dir, 'bridge.json') },
     bridge: { state: 'ready', token: 'test-token', baseUrl: '' },
   })
+  // 工具表现取自宿主上下文（不再由 review() 的参数传入），这里注入一个最小宿主。
+  mod.__test.setHostContext(FAKE_CTX)
   try {
     await fn(dir)
   } finally {
+    mod.__test.setHostContext(null)
     mod.__test.setResolved(null)
     Object.assign(DEFAULTS, saved)
     resetRedactor()
