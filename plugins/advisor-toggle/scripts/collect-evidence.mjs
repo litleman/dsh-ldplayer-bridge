@@ -33,11 +33,18 @@ function fileHash(path) {
   return r.code === 0 && /^[0-9a-f]{64}$/.test(hash) ? hash : ''
 }
 
+// 运行时产物与本地私有目录不参与"分发文件集"比对（它们本来就不该进仓库）。
+const SKIP_DIRS = new Set(['node_modules', '.git', '.state', 'gpt-notes'])
+const SKIP_FILES = new Set(['.boot.log'])
 async function walk(dir, base = dir, acc = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name)
-    if (entry.isDirectory()) await walk(full, base, acc)
-    else acc.push(relative(base, full).replaceAll('\\', '/'))
+    if (entry.isDirectory()) {
+      if (SKIP_DIRS.has(entry.name)) continue
+      await walk(join(dir, entry.name), base, acc)
+      continue
+    }
+    if (SKIP_FILES.has(entry.name) || entry.name.endsWith('.log')) continue
+    acc.push(relative(base, join(dir, entry.name)).replaceAll('\\', '/'))
   }
   return acc
 }
