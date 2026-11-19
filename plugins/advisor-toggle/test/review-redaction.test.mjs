@@ -11,6 +11,18 @@ import { join } from 'node:path';
 const mod = await import('../index.js');
 const { DEFAULTS, stateOf, setRedactor, resetRedactor } = mod.__test;
 
+// review() 现在要在签发授权前读到真实工具表（HIGH-3：读不到就不给写授权）。
+// 这里给一个最小 tools 服务，让 plan GO 能正常转成授权。
+const FAKE_CTX = {
+  get: (name) =>
+    name === 'tools'
+      ? {
+          list: async () => [{ name: 'read' }, { name: 'pwsh' }],
+          register: () => () => {},
+        }
+      : undefined,
+};
+
 async function withBridge(handler) {
   const requests = []
   const server = http.createServer((req, res) => {
@@ -69,7 +81,7 @@ test('外发消息必须脱敏，且头部写明命中数', async () => {
 
       const secret = 'X-DSH-Token: 7odG4SuU1sz-Buh6DrrcYwgzuT'
       const home = 'C:\\Users\\litleman\\secret\\file.txt'
-      const result = await mod.__test.review({}, fakeExec(sessionId), 'plan', `方案里不小心贴了凭据：\n${secret}\n路径 ${home}`)
+      const result = await mod.__test.review(FAKE_CTX, fakeExec(sessionId), 'plan', `方案里不小心贴了凭据：\n${secret}\n路径 ${home}`)
 
       assert.equal(result.ok, true, '正常情况应拿到回复')
       const sent = bridge.requests.find((r) => r.url === '/v1/tasks')
@@ -105,7 +117,7 @@ test('脱敏失败必须 fail-closed：桥请求数为 0，且结果不是成功
       let result
       let threw = null
       try {
-        result = await mod.__test.review({}, fakeExec(sessionId), 'plan', '随便一段正文')
+        result = await mod.__test.review(FAKE_CTX, fakeExec(sessionId), 'plan', '随便一段正文')
       } catch (error) {
         threw = error
       }

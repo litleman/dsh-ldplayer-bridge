@@ -89,6 +89,13 @@ window.__ModuleLoader__.load({
             enabled: Boolean(next.enabled),
             noGoStreak: Number(next.noGoStreak || 0),
             alert: Boolean(next.alert),
+            // 这三个是"能不能用"的判断依据，必须真正存下来：
+            // 之前只存了 enabled/alert，导致 workspaceState 永远是 undefined，
+            // 「未配置」提示形同虚设（顾问验收指出）。
+            workspaceState: String(next.workspaceState || ''),
+            configError: String(next.configError || ''),
+            bridgeState: String(next.bridgeState || ''),
+            loaded: true,
           })
           setStale(false)
         } catch (error) {
@@ -139,7 +146,7 @@ window.__ModuleLoader__.load({
           if (!response.ok) throw new Error(`HTTP ${response.status}`)
           const next = await response.json()
           stateVersion.current = Number(next.stateVersion || stateVersion.current)
-          setState({ enabled: Boolean(next.enabled), noGoStreak: 0, alert: false })
+          setState((prev) => ({ ...prev, enabled: Boolean(next.enabled), noGoStreak: 0, alert: false }))
           setStale(false)
           await refresh() // 打开时服务端会重算版本，顺手同步一次
         } catch {
@@ -252,7 +259,11 @@ window.__ModuleLoader__.load({
 
       // 未配置 workspace 时开关没有意义：必须把"配置缺失"直接摆在按钮上，
       // 而不是让用户点了一下才发现没反应（顾问验收要求：不许静默失效）。
-      const misconfigured = Boolean(state.workspaceState && state.workspaceState !== 'ready')
+      // 三态必须分清：还没读到服务端状态（unknown/loading）≠ 已确认可用（ready）。
+      const loaded = Boolean(state.loaded)
+      const workspaceState = String(state.workspaceState || '')
+      const pending = !loaded || !workspaceState
+      const misconfigured = !pending && workspaceState !== 'ready'
       const configHint = state.configError ? `（${state.configError}）` : ''
 
       const label = state.enabled ? '顾问已开启' : '顾问开关'
@@ -263,15 +274,17 @@ window.__ModuleLoader__.load({
           className: 'advisor-chip',
           'data-on': state.enabled ? '1' : '0',
           'data-alert': misconfigured ? 'config' : state.alert || state.noGoStreak >= 3 ? '1' : '0',
-          'data-config': misconfigured ? '1' : '0',
+          'data-config': pending ? 'loading' : misconfigured ? '1' : '0',
           'data-stale': stale ? '1' : '0',
           title: stale
             ? '顾问开关：状态同步失败，显示可能不是最新的'
-            : misconfigured
-              ? `顾问开关不可用：未配置 workspace${configHint}。请在 profile 的 cordis.patch.yml 里给 advisor-toggle 设置 workspace，或设置环境变量 DSH_WORKSPACE。`
-              : state.enabled
-                ? '顾问已开启：方案与交付都会先交给 ChatGPT 评审，拿到 GO 才继续。长按 3 秒可应急解除（写审计日志）。'
-                : '顾问开关：打开后，方案与交付先交给 ChatGPT 评审',
+            : pending
+              ? '顾问开关：正在确认配置…（还没拿到服务端状态前，不会显示成可用）'
+              : misconfigured
+                ? `顾问开关不可用：未配置 workspace${configHint}。请在 profile 的 cordis.patch.yml 里给 advisor-toggle 设置 workspace，或设置环境变量 DSH_WORKSPACE。`
+                : state.enabled
+                  ? '顾问已开启：方案与交付都会先交给 ChatGPT 评审，拿到 GO 才继续。长按 3 秒可应急解除（写审计日志）。'
+                  : '顾问开关：打开后，方案与交付先交给 ChatGPT 评审',
           onClick: () => {
             // 长按刚结束时浏览器会补一个 click，这一次不当作开关切换。
             if (suppressClick.current) {
@@ -279,8 +292,8 @@ window.__ModuleLoader__.load({
               longPressFired.current = false
               return
             }
-            // 配置不可用时点了也不会生效，直接不切（按钮上已标出原因）。
-            if (misconfigured) return
+            // 配置不可用 / 状态未就绪时点了也不会生效，直接不切（按钮上已标出原因）。
+            if (pending || misconfigured) return
             toggle()
           },
           onPointerDown: startOverridePress,

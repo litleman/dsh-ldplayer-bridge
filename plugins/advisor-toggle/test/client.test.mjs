@@ -118,6 +118,15 @@ test('客户端不再通过 useSessions 扫 byId 找会话', () => {
 test('未配置 workspace 时按钮标出配置异常并且不切换（不许静默失效）', () => {
   assert.ok(/data-config/.test(SOURCE), '按钮需要 data-config 标记');
   assert.ok(/workspaceState !== 'ready'/.test(SOURCE), '需要从 /state 读 workspaceState');
-  assert.ok(/if \(misconfigured\) return/.test(SOURCE), '配置不可用时点击不切开关');
+  assert.ok(/if \(pending \|\| misconfigured\) return/.test(SOURCE), '未就绪或配置不可用时点击不切开关');
   assert.ok(/DSH_WORKSPACE/.test(SOURCE), '提示里要写清怎么配');
+});
+
+test('状态未就绪（unknown/loading）不能被当成可用', () => {
+  // 顾问验收要求：ready / unconfigured / invalid / unknown 必须区分，
+  // 其中 unknown 既不显示成可用，也不显示成"未配置"（那是还没问到）。
+  assert.ok(/const loaded = Boolean\(state\.loaded\)/.test(SOURCE), '要记录是否已拿到服务端状态');
+  assert.ok(/const pending = !loaded \|\| !workspaceState/.test(SOURCE), '未就绪要单独判');
+  assert.ok(/data-config': pending \? 'loading'/.test(SOURCE), '未就绪应有独立标记');
+  assert.ok(/workspaceState: String\(next\.workspaceState \|\| ''\)/.test(SOURCE), 'refresh 必须把 workspaceState 存进状态');
 });

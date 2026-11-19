@@ -3,19 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "顾问开关：方案与交付先交给 ChatGPT 顾问评审，拿到 GO 才继续。",
+  "description": "顾问开关：方案与交付先交给 ChatGPT 顾问评审，拿到 GO 才继续；HOLD 补资料、NO-GO 改方案。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./config": "./config.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
   "files": [
     "index.js",
+    "config.js",
     "client.js",
     "cordis.patch.yml",
+    "README.md",
     "locale/*.json",
-    "icon.svg"
+    "icon.svg",
+    "docs/*.md",
+    "scripts/*.mjs",
+    "tools/*.mjs",
+    "test/*.mjs"
   ],
   "dsh": {
     "bundle": {

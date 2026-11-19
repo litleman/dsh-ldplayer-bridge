@@ -102,7 +102,7 @@ function makeHarness({ enabled = true } = {}) {
       if (url.includes('/state')) {
         return {
           ok: true,
-          json: async () => ({ enabled, noGoStreak: 0, stateVersion: 7, generation: 1, alert: false }),
+          json: async () => ({ enabled, noGoStreak: 0, stateVersion: 7, generation: 1, alert: false, workspaceState: 'ready', configError: '', bridgeState: 'ready' }),
         };
       }
       if (url.includes('/override/challenge')) return { ok: true, json: async () => ({ challengeId: 'c1', nonce: 'n1', expiresAt: Date.now() + 30000 }) };

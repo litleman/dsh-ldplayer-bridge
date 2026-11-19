@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
-import { resolveConfig, resolveHome } from './config.js'
+import { bridgeConfig, resolveConfig, resolveHome } from './config.js'
 
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 // 日志必须写在工作区之外：写在插件目录里会让 git 工作树每写一行就变一次，
@@ -167,6 +167,8 @@ function stateOf(sessionId) {
       clientHelloAt: 0,
       // 注册那个 nonce 的工具快照摘要：工具集变了（插件重载/装新插件）授权必须重来。
       toolSnapshotDigest: '',
+      // 快照是否真的读到了工具表（HIGH-3）：false 时不许签发写授权。
+      toolSnapshotTrusted: false,
       updatedAt: Date.now(),
     })
   }
@@ -613,20 +615,20 @@ async function review(ctx, exec, phase, message) {
 const randomId = (bytes = 8) => randomBytes(bytes).toString('hex')
 const sha256 = (text) => createHash('sha256').update(text).digest('hex')
 
-// 工具快照摘要：授权绑它，工具集一变（装了新工具/插件重载）授权即失效。
-// 拿不到工具表时退化成固定标记而不是空串——空串会被 fail-closed 校验当成"缺绑定字段"，
-// 让合法批次也进不来；固定标记则安全（所有空快照彼此相等，但换工具集就会变）。
+// 工具快照：授权绑它，工具集一变（装了新工具/插件重载）授权即失效。
+// 关键区分（对抗评审 HIGH-3）："工具表读不到"不等于"工具集就是空的"。
+// 读不到时返回 trusted=false，调用方必须据此拒绝签发写授权——不能拿固定标记冒充可信快照。
 const ADVISOR_ONLY_SNAPSHOT = sha256('advisor-only')
 async function toolSnapshotOf(ctx) {
   try {
     const tools = ctx?.get?.('tools')
-    if (typeof tools?.list !== 'function') return ADVISOR_ONLY_SNAPSHOT
+    if (typeof tools?.list !== 'function') return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: 'no-tools-service' }
     const list = await tools.list()
     const names = (Array.isArray(list) ? list : []).map((item) => String(item?.name || '')).filter(Boolean).sort()
-    if (names.length === 0) return ADVISOR_ONLY_SNAPSHOT
-    return sha256(names.join(','))
-  } catch {
-    return ADVISOR_ONLY_SNAPSHOT
+    if (names.length === 0) return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: 'empty-tool-list' }
+    return { digest: sha256(names.join(',')), trusted: true, reason: '', count: names.length }
+  } catch (error) {
+    return { digest: ADVISOR_ONLY_SNAPSHOT, trusted: false, reason: `tool-list-failed:${error?.message || error}` }
   }
 }
 
@@ -638,6 +640,8 @@ function makeGrant({ state, version, planId, round }) {
   if (!planId) throw new Error('makeGrant: planId 不能为空')
   const snapshot = String(state.toolSnapshotDigest || '')
   if (!snapshot) throw new Error('makeGrant: toolSnapshotDigest 不能为空')
+  // HIGH-3：没有读到真实工具表时不许签发写授权，哪怕顾问回了 GO。
+  if (state.toolSnapshotTrusted !== true) throw new Error('makeGrant: 工具快照不可信，拒绝签发写授权')
   const at = Date.now()
   const digest = sha256(`${planId}\0${version}\0${at}\0${state.planDigest}`)
   const ttl = Number(DEFAULTS.grantTtlMs || 30 * 60 * 1000)
@@ -735,9 +739,31 @@ async function reviewLocked(ctx, exec, sessionId, state, phase, message) {
     }
     state.activePlanId = planId
     state.planDigest = sha256(`${phase}\0${message}\0${version}`)
-    // 工具快照是授权的绑定项：toggle 开的时候已经取过，重启/测试路径可能为空，这里补取一次。
-    // 取不到时 toolSnapshot() 会退化成固定标记（而不是空串），保证 makeGrant 的 fail-closed 校验不被绕过。
-    if (!state.toolSnapshotDigest) state.toolSnapshotDigest = await toolSnapshotOf(ctx)
+    // 工具快照是授权的绑定项：每次签发前重新取一次，绝不复用"上次的"快照。
+    // HIGH-3：取不到真实工具表（没有 tools 服务 / 列表为空 / 读取抛错）时 → 不签发写授权，
+    // 顾问的 GO 只能停留在"方案通过"，不能变成"可以动手"。
+    const snapshot = await toolSnapshotOf(ctx)
+    state.toolSnapshotDigest = snapshot.digest
+    state.toolSnapshotTrusted = snapshot.trusted
+    if (!snapshot.trusted) {
+      state.grant = null
+      state.grantExpired = 'tool-snapshot-untrusted'
+      await log(
+        `advisor:grant-refused session=${sessionId} plan=${planId} reason=${snapshot.reason} trusted=false`,
+      )
+      return {
+        sessionId,
+        phase,
+        verdict,
+        reply: task.reply || '',
+        ok: false,
+        error: `工具集快照不可用（${snapshot.reason}），本次 GO 不能转成写授权；请检查 tools 服务是否已就绪后重新调用 advisor_plan。`,
+        version,
+        round: state.round,
+        noGoStreak: state.noGoStreak,
+        notePath: '',
+      }
+    }
     state.grant = makeGrant({ state, version, planId, round: state.round })
     state.grantExpired = ''
     await log(
@@ -895,6 +921,35 @@ export function apply(ctx, rawConfig = {}) {
 
   log(`host:apply workspace=${DEFAULTS.workspace}`)
   // 解析配置：workspace 未配置/不合法时不兜底 cwd，桥状态与路径推导解耦（顾问 GO 的 A–D 组）。
+  // 桥状态会变（雷电模拟器关掉、Bridge 重启），所以除了启动探测，还要定期重探，
+  // 否则 /state 会把开机的快照一直当成现状，胶囊/工具都会按过时结论走。
+  let bridgeTimer = null
+  const reprobeBridge = async () => {
+    try {
+      const resolved = RESOLVED
+      if (!resolved || resolved.workspace.state !== 'ready') return
+      const next = await bridgeConfig(resolved.workspace.bridgeConfigPath, process.env, {})
+      const prev = resolved.bridge || {}
+      resolved.bridge = next
+      if (prev.state !== next.state) {
+        await log(`host:bridge-state ${prev.state || '-'} -> ${next.state} reason=${next.reason || '-'}`)
+      }
+    } catch (error) {
+      await log(`host:bridge-reprobe-failed ${error && error.message}`)
+    }
+  }
+  ctx.effect(() => {
+    bridgeTimer = setInterval(() => {
+      void reprobeBridge()
+    }, 30000)
+    if (bridgeTimer && typeof bridgeTimer.unref === 'function') bridgeTimer.unref()
+    return () => {
+      if (bridgeTimer) {
+        clearInterval(bridgeTimer)
+        bridgeTimer = null
+      }
+    }
+  })
   void resolveConfig(DEFAULTS, process.env)
     .then((resolved) => {
       RESOLVED = resolved
@@ -914,7 +969,6 @@ export function apply(ctx, rawConfig = {}) {
   sessions.clear()
 
   const tools = ctx.get?.('tools')
-  const toolSnapshot = () => toolSnapshotOf(ctx)
   if (tools?.register) {
     ctx.effect(() =>
       tools.register(
@@ -1055,14 +1109,9 @@ export function apply(ctx, rawConfig = {}) {
     })
   }
 
-  const webServer = ctx.get?.('webServer')
-  if (!webServer?.register) {
-    log('host:warn 没有 webServer 服务，浏览器半拿不到状态')
-    return
-  }
-
-  ctx.effect(() => {
-    const dispose = webServer.register({
+  // webServer 可能比本插件晚就绪（不同启动顺序下会这样）：拿不到就每秒重试，最多 60 次。
+  // 以前这里直接 return，结果是路由没挂上、浏览器半 fetch 失败，胶囊显示"状态同步失败（可能不是最新）"。
+  const routeSpec = () => ({
       kind: 'prefix',
       path: '/api/advisor-toggle',
       handler: async (req, res) => {
@@ -1117,9 +1166,11 @@ export function apply(ctx, rawConfig = {}) {
             if (!state.clientNonce) {
               state.clientNonce = nonce
               state.clientHelloAt = Date.now()
-              state.toolSnapshotDigest = await toolSnapshot()
+              const snap = await toolSnapshotOf(ctx)
+              state.toolSnapshotDigest = snap.digest
+              state.toolSnapshotTrusted = snap.trusted
               await log(
-                `host:hello session=${sessionId} nonce=${nonce} tools=${String(state.toolSnapshotDigest).slice(0, 16)}`,
+                `host:hello session=${sessionId} nonce=${nonce} tools=${String(snap.digest).slice(0, 16)} trusted=${snap.trusted} reason=${snap.reason}`,
               )
             }
             return send(200, {
@@ -1163,7 +1214,8 @@ export function apply(ctx, rawConfig = {}) {
               // 新的一轮开关 = 新计划：计划号与工具快照一起重置。
               state.activePlanId = ''
               state.planDigest = ''
-              state.toolSnapshotDigest = await toolSnapshot()
+              state.toolSnapshotDigest = (await toolSnapshotOf(ctx)).digest
+              state.toolSnapshotTrusted = false
               state.degradedAt = 0
               state.deniedStreak = 0
               state.noGoStreak = 0
@@ -1247,8 +1299,45 @@ export function apply(ctx, rawConfig = {}) {
         }
       },
     })
+  let routeDispose = null
+  let routeTimer = null
+  let routeAttempts = 0
+  const registerRoutes = () => {
+    if (routeDispose) return true
+    const webServer = ctx.get?.('webServer')
+    if (!webServer || typeof webServer.register !== 'function') return false
+    routeDispose = webServer.register(routeSpec())
     log('host:routes registered prefix=/api/advisor-toggle')
-    return () => dispose()
+    return true
+  }
+  ctx.effect(() => {
+    if (!registerRoutes()) {
+      routeAttempts = 0
+      routeTimer = setInterval(() => {
+        routeAttempts += 1
+        if (registerRoutes()) {
+          if (routeTimer) clearInterval(routeTimer)
+          routeTimer = null
+          return
+        }
+        if (routeAttempts >= 60) {
+          if (routeTimer) clearInterval(routeTimer)
+          routeTimer = null
+          log('host:warn webServer 60 秒内仍不可用，路由未注册')
+        }
+      }, 1000)
+      if (routeTimer && typeof routeTimer.unref === 'function') routeTimer.unref()
+    }
+    return () => {
+      if (routeTimer) {
+        clearInterval(routeTimer)
+        routeTimer = null
+      }
+      if (routeDispose) {
+        routeDispose()
+        routeDispose = null
+      }
+    }
   })
 
   log('host:ready')

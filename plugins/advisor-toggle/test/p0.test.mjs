@@ -19,7 +19,7 @@ test('授权摘要不截断：内容版本是完整 64 位 SHA-256', async () =>
 });
 
 test('makeGrant 绑定计划号、工具快照与完整摘要', () => {
-  const state = { planDigest: 'pd', toolSnapshotDigest: 'snap-1' };
+  const state = { planDigest: 'pd', toolSnapshotDigest: 'snap-1', toolSnapshotTrusted: true };
   const g = makeGrant({ state, version: 'v1', planId: 'plan-A', round: 1 });
   assert.equal(g.planId, 'plan-A');
   assert.equal(g.toolSnapshotDigest, 'snap-1');
@@ -117,9 +117,19 @@ test('授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2）', () => {
 })
 
 test('makeGrant 拒绝缺失绑定字段，且总带合法 expiresAt', () => {
-  const state = { toolSnapshotDigest: 'snap', planDigest: 'pd' }
+  const state = { toolSnapshotDigest: 'snap', toolSnapshotTrusted: true, planDigest: 'pd' }
   assert.throws(() => makeGrant({ state, version: 'v1', planId: '', round: 1 }), /planId/)
-  assert.throws(() => makeGrant({ state: { planDigest: 'pd' }, version: 'v1', planId: 'plan-A', round: 1 }), /toolSnapshotDigest/)
+  assert.throws(() => makeGrant({ state: { planDigest: 'pd', toolSnapshotTrusted: true }, version: 'v1', planId: 'plan-A', round: 1 }), /toolSnapshotDigest/)
   const g = makeGrant({ state, version: 'v1', planId: 'plan-A', round: 1 })
   assert.ok(g.expiresAt > g.at, 'expiresAt 必须晚于 at')
+})
+
+test('HIGH-3：读不到真实工具表时不许签发写授权', () => {
+  // 工具表不可用（digest 退回固定标记、trusted=false）→ makeGrant 必须抛错，
+  // 而不是把"固定标记"当成合法快照盖出一张能用的写授权。
+  const untrusted = { toolSnapshotDigest: 'advisor-only-fallback', toolSnapshotTrusted: false, planDigest: 'pd' }
+  assert.throws(() => makeGrant({ state: untrusted, version: 'v1', planId: 'plan-X', round: 1 }), /不可信/)
+
+  // 状态对象默认就是不可信：新会话在没读到工具表之前不能有写授权。
+  assert.equal(stateOf('p0-untrusted-default').toolSnapshotTrusted, false)
 })
