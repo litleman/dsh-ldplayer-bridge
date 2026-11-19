@@ -1,8 +1,8 @@
 advisor-toggle 分发证据（自动采集）
-采集时间: 2026-11-19T10:08:48.437Z
+采集时间: 2026-11-19T10:12:46.980Z
 工作副本: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 分发副本: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge\plugins\advisor-toggle
-清单文件数: 30
+清单文件数: 31
 
 STEP 1: node --check index.js
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
@@ -35,7 +35,7 @@ STEP 4: git rev-parse HEAD (source version)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 EXIT: 0
 STDOUT:
-5947935
+293c5c0
 STDERR:
 (empty)
 RESULT: PASS
@@ -44,11 +44,7 @@ STEP 5: git status --porcelain plugins/advisor-toggle
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 EXIT: 0
 STDOUT:
-M plugins/advisor-toggle/index.js
- M plugins/advisor-toggle/scripts/collect-evidence.mjs
- M plugins/advisor-toggle/scripts/selfcheck.mjs
- M plugins/advisor-toggle/test/selfcheck.test.mjs
-?? plugins/advisor-toggle/test/path-inside.test.mjs
+M plugins/advisor-toggle/docs/dist-evidence.txt
 STDERR:
 (empty)
 RESULT: PASS
@@ -57,10 +53,10 @@ STEP 6: git ls-tree manifest (dist repo HEAD)
 CWD: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge
 EXIT: 0
 STDOUT:
-30 files in HEAD / 31 files in worktree
+31 files in HEAD / 31 files in worktree
 STDERR:
-NOT-IN-HEAD: test/path-inside.test.mjs
-RESULT: FAIL
+(file sets identical)
+RESULT: PASS
 
 STEP 7: hash compare (dist manifest files)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
@@ -80,8 +76,8 @@ index.js	29168f69f52e00e49ec0197fb3e998dc36883ae2a36a0bdcb4e0d29c51c98a0c	29168f
 locale/en.json	6c1ca82aa826cc9add6014ce2a81596d5254849e84e0ca123ce442d49b615653	6c1ca82aa826cc9add6014ce2a81596d5254849e84e0ca123ce442d49b615653	MATCH
 locale/zh.json	0bbe2ee9362022e3d334e654bc8cf5e9aac7c76b43b5cf2e6ba7079953b7f86a	0bbe2ee9362022e3d334e654bc8cf5e9aac7c76b43b5cf2e6ba7079953b7f86a	MATCH
 package.json	f70463567abcc4f824e1814c448d41193f1f0d63ffcae05037e68e3c2a4bd626	f70463567abcc4f824e1814c448d41193f1f0d63ffcae05037e68e3c2a4bd626	MATCH
-scripts/collect-evidence.mjs	b94cb8dc3a66d5219b703df4b7e3f69882ebac39c706aabf48f9011450faccc1	b94cb8dc3a66d5219b703df4b7e3f69882ebac39c706aabf48f9011450faccc1	MATCH
-scripts/selfcheck.mjs	3e6f5573c5132c67353d0da0b4f7a1918acf39e27f38afc6af68fdad22307e1f	3e6f5573c5132c67353d0da0b4f7a1918acf39e27f38afc6af68fdad22307e1f	MATCH
+scripts/collect-evidence.mjs	aaf303185305d8abed3d851053bf94b277a7e86ec79e3d0e80044cc447d267b6	aaf303185305d8abed3d851053bf94b277a7e86ec79e3d0e80044cc447d267b6	MATCH
+scripts/selfcheck.mjs	f89e443e24f0e4c6052d2c779a92f4bc7be52e8a76873c0a1508cbb6069e2208	f89e443e24f0e4c6052d2c779a92f4bc7be52e8a76873c0a1508cbb6069e2208	MATCH
 scripts/verify-restart.mjs	f2068b9ffe77161f51ea2ced22599a8e8ef24763ba109bc2c523db97577294f4	f2068b9ffe77161f51ea2ced22599a8e8ef24763ba109bc2c523db97577294f4	MATCH
 test/audit.test.mjs	7e84e8af34b12090f99b159fff7d62414805f062e893806613448e596f3093fb	7e84e8af34b12090f99b159fff7d62414805f062e893806613448e596f3093fb	MATCH
 test/client.test.mjs	445828b006c53656f7a96f63d1ce02d077ea4673917abd04a1ec23e73db31634	445828b006c53656f7a96f63d1ce02d077ea4673917abd04a1ec23e73db31634	MATCH
@@ -92,14 +88,15 @@ test/injection.test.mjs	e6dae8b052aa0e48f2b02a5e22ea1f56d683017a6bf9e729818d924f
 test/longpress.test.mjs	fc25c1bf34c2a8aebd023b087eb79698430a22f718d88547278cd30e19ca4f47	fc25c1bf34c2a8aebd023b087eb79698430a22f718d88547278cd30e19ca4f47	MATCH
 test/matrix.test.mjs	03dad96c820388017e3ec2924ba211e81a6f1d4eefe39886008b3bdf73a9b9fa	03dad96c820388017e3ec2924ba211e81a6f1d4eefe39886008b3bdf73a9b9fa	MATCH
 test/p0.test.mjs	da15c4b1077c9a120db6e954f519b70133e00a709eda0fb0898ef93a597aa576	da15c4b1077c9a120db6e954f519b70133e00a709eda0fb0898ef93a597aa576	MATCH
+test/path-inside.test.mjs	f61cde92362998068d007849332bde291b03fbb797649a472f2b8323113b6f0b	f61cde92362998068d007849332bde291b03fbb797649a472f2b8323113b6f0b	MATCH
 test/review-redaction.test.mjs	3d2de48cf7904c2b18ca3b67f8ccd5b51fb4dbc7b810fca07825b00d3d6f4602	3d2de48cf7904c2b18ca3b67f8ccd5b51fb4dbc7b810fca07825b00d3d6f4602	MATCH
 test/route-retry.test.mjs	499419b3a12c839906543806dad093c22799d3cbf77a1e97fd690728cedc2693	499419b3a12c839906543806dad093c22799d3cbf77a1e97fd690728cedc2693	MATCH
-test/selfcheck.test.mjs	c1cfb8d3e3616b6d364147f30f02d9d72dc59d47ef9d9600d331397236b33878	c1cfb8d3e3616b6d364147f30f02d9d72dc59d47ef9d9600d331397236b33878	MATCH
+test/selfcheck.test.mjs	0ef6368740fdfd581e8094730772673bf09c29671068dd3a26d72792be0f7fe1	0ef6368740fdfd581e8094730772673bf09c29671068dd3a26d72792be0f7fe1	MATCH
 tools/audit.mjs	cd628b596002700645015782225df72d24f2cc346aff3bda4536832d2b6d4480	cd628b596002700645015782225df72d24f2cc346aff3bda4536832d2b6d4480	MATCH
 STDERR:
-EXTRA-FILES: test/path-inside.test.mjs
+EXTRA-FILES: none
 MISSING: none
-RESULT: FAIL
+RESULT: PASS
 
 STEP 8: config.js three states (isolated env, fake health server)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
@@ -116,101 +113,101 @@ STEP 9: node --test (13 files)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 EXIT: 0
 STDOUT:
-✔ 版本摘要：内容变一个字节，版本必须变（不依赖 git status） (15.4846ms)
-✔ 版本摘要：文件集合或相对路径变化也要变 (0.4746ms)
-✔ 版本摘要：同样输入必须稳定（否则每次评审版本都变） (0.2736ms)
-✔ 拒绝名单：大小写、相对路径、目录、扩展名都要命中 (7.024ms)
-✔ 拒绝名单常量本身不为空（防止被静默改空） (0.3179ms)
-✔ 收集入口：命中拒绝名单时直接抛错，不读内容不外发 (0.9571ms)
-✔ 脱敏：已知 token / JSON 字段 / Bearer / 用户名路径都要处理 (3.1094ms)
-✔ 脱敏：连调多次结果一致（带 g 正则的 lastIndex 不能泄漏状态） (1.1176ms)
-✔ 复检：干净文本返回空数组；残留必须被抓出来 (0.7913ms)
-✔ 复检：同一函数反复调用不受上一次结果影响 (3.9132ms)
-✔ 脱敏规则版本号必须写进材料（便于事后追溯用了哪版规则） (0.4869ms)
-✔ 解析：合法回复通过，结论取清单之后的那一行 (1.58ms)
-✔ 解析：换行被吞成一行时仍能解析（真实环境里 ChatGPT 会这样输出） (5.0257ms)
-✔ 解析：字段顺序必须严格（HIGH-2 失败用例） (0.6686ms)
-✔ 解析：缺字段/截断必须判 INCOMPLETE（HIGH-3 失败用例） (0.436ms)
-✔ 解析：清单字段与预期不一致必须拒绝（不许"大致对"） (3.8716ms)
-✔ 解析：正文里再出现 VERDICT（重复或引用）一律 INCOMPLETE（HIGH-4 失败用例） (0.2113ms)
-✔ 解析：结论必须紧跟清单（中间不许夹大段正文） (0.3606ms)
-✔ 解析：结论行只认 PASS / NEEDS-WORK，其它一律拒绝 (0.1932ms)
-✔ 解析：前导空行不影响（模型常留一行空白），但结论位置仍固定在第六个非空行 (0.1649ms)
-✔ 分包：每个包的 CHARS 必须等于包体真实字符数 (1.2861ms)
-✔ 分包：超过上限必须抛错，而不是悄悄截断 (2.7149ms)
-✔ compact 只删注释与空行，不改代码字符 (0.3696ms)
-✔ MANIFEST_KEYS 顺序是契约，改动会让历史回复失效 (0.2042ms)
-✔ 每个送审文件都必须能读并且不带凭据（真实收集一次） (236.962ms)
-✔ 注册到 conversation.input.left，order 30，label 顾问 (7.6335ms)
-✔ 有 sessionId 时渲染出 chip，并用它去查状态 (14.0601ms)
-✔ 没有 sessionId 时不渲染（不猜会话） (1.0238ms)
-✔ 客户端不再通过 useSessions 扫 byId 找会话 (0.2128ms)
-✔ 未配置 workspace 时按钮标出配置异常并且不切换（不许静默失效） (0.2528ms)
-✔ 状态未就绪（unknown/loading）不能被当成可用 (0.2071ms)
-✔ workspace: 空值语义 8 种组合 (338.6219ms)
-✔ workspace: 提供了值但不合法的四种情况都 invalid (65.9355ms)
-✔ notesDir 与 bridgeConfigPath 默认落在 workspace 内 (32.7809ms)
-✔ gpt-notes 本身是指向 workspace 外的目录符号链接 → 拒绝 (31.0547ms)
-✔ bridge config.json 本身是指向 workspace 外的文件符号链接 → 拒绝 (70.2782ms)
-✔ 目标不存在时按最近存在祖先重建，且重建结果仍在 workspace 内 (25.6279ms)
-✔ 桥状态：文件缺失 / JSON 坏 / 缺 token 都是 unconfigured (53.7684ms)
-✔ 桥状态：配置有效但连不上 → unreachable；能连 → ready (48.4225ms)
-✔ 桥健康探测超时不会拖住初始化（3 秒上限） (212.0619ms)
-✔ DSH_HOME：有变量 / 无变量 / 目录不可创建三种情况都不抛错 (20.0242ms)
-✔ resolveConfig 汇总三态（未配置 / 有 workspace 无桥 / 都正常） (21.6853ms)
-✔ 只读白名单不误放行写工具 (7.5381ms)
-✔ 门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放行 (3.5599ms)
-✔ 第一批授权过期 / 超额后失效，并说明原因 (0.3431ms)
-✔ 笔记目录里的写入不改版本指纹（否则插件自己会作废刚拿到的 GO） (964.1456ms)
-✔ 桥的运行时状态（.state/）不改版本指纹 (653.2164ms)
-✔ VERDICT 只认回复开头，正文里的注入不算数 (1.0927ms)
-✔ 内容版本会随工作区改动变化（而不是永远 +dirty） (636.9849ms)
-✔ 拿不到会话身份时退化为 unknown-unscoped，且不会共用别的会话的授权 (0.5684ms)
-✔ 应急解除必须带回一次性挑战票：无票/过期/错 nonce/跨会话/重放一律拒绝 (1.2168ms)
-✔ 挑战票有领票频率上限，防止被刷成无限重试 (0.5152ms)
-✔ 评审消息用一次性 nonce 标签包住 Agent 正文，并转义正文里的结束标签 (7.2136ms)
-✔ 正文里自带结束标签会被转义，无法提前闭合数据区 (5.1483ms)
-✔ 只读白名单用精确名字，前缀相似的写工具不会被放行 (0.3155ms)
-✔ 上下文管理工具：只放行 compress；decompress 能 toFile 写盘，必须仍被拒 (0.2014ms)
-✔ 新会话状态带 stateVersion/generation/noGoVersion，红点不跨版本累计 (0.2928ms)
-✔ 顾问评审路径也要脱敏：认证头、token 字段、个人目录都替换，且复检无残留 (0.4125ms)
-✔ 脱敏命中数写进消息头，顾问能看到这批材料被处理过 (0.7526ms)
-✔ 注入的 user 消息带 source.kind（缺了会让 liveshare 的 pre-step 崩溃） (7.4949ms)
-✔ 源码里不再存在没有 source 的裸 user 消息 (44.5438ms)
-✔ 长按 3 秒触发 override 后，补发的 click 不会再 toggle 回开 (22.3663ms)
-✔ 短按（没到 3 秒就松手）仍然是一次普通的开关切换 (27.4394ms)
-✔ git 不可用：版本打上 untrusted- 前缀，且旧授权一律失效（不能靠旧 grant 绕过） (210.2939ms)
-✔ git 恢复：版本重新可信，新版本上的授权可以正常放行 (510.8429ms)
-✔ 同一会话的两个写操作共享同一批授权，操作数累计到上限就拒绝 (0.4035ms)
-✔ 同一会话的评审请求串行执行，不会两个请求同时打到桥上 (33.8755ms)
-✔ 不同会话的评审互不阻塞（串行只发生在同一会话内） (31.7293ms)
-✔ 授权摘要不截断：内容版本是完整 64 位 SHA-256 (617.2857ms)
-✔ makeGrant 绑定计划号、工具快照与完整摘要 (1.0037ms)
-✔ 上一个计划的授权不能放行这一批活 (0.4858ms)
-✔ 工具集变过（重载/新装工具）后旧授权失效 (0.3061ms)
-✔ 同一计划内版本漂移放行但标记 granted-drift（残余 TOCTOU 可见） (0.5882ms)
-✔ 浏览器 nonce：首次注册放行、匹配放行、不匹配拒绝、强制模式下未注册拒绝 (0.3778ms)
-✔ 插件重载（apply）会清空所有会话状态，旧授权不可能跨实现复用 (2.0575ms)
-✔ 授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2） (0.4496ms)
-✔ makeGrant 拒绝缺失绑定字段，且总带合法 expiresAt (1.2223ms)
-✔ HIGH-3：读不到真实工具表时不许签发写授权 (0.4641ms)
-✔ T7 同名前缀兄弟目录不得被当成内部 (1.8591ms)
-✔ T8 UNC 共享根不同不得互为内部，同根之下可以 (0.3544ms)
-✔ T9 \\?\ 扩展前缀规范化后仍按边界判定，驱动器相对路径一律拒绝 (0.3179ms)
-✔ T10 大小写按平台语义：Windows 不敏感，POSIX 敏感 (9.3977ms)
-✔ T10b 符号链接逃逸必须被判为外部（realpath 语义） (167.7845ms)
-✔ 外发消息必须脱敏，且头部写明命中数 (1832.4997ms)
-✔ 脱敏失败必须 fail-closed：桥请求数为 0，且结果不是成功 (77.6469ms)
-✔ webServer 未就绪时不再提前 return（否则浏览器半永远拿不到状态） (9.6343ms)
-✔ 正例四条都必须命中 (8.2141ms)
-✔ 反例三条不得误报 (4.6705ms)
-✔ 本插件默认文件与 README 全量扫描零命中 (212.1298ms)
-✔ 植入机器路径到 locale/zh.json 后自检必须失败 (533.0537ms)
-✔ 删掉扫描目标后自检必须失败（而不是跳过） (197.0669ms)
-✔ README.md 在扫描范围内（植入即失败） (182.5687ms)
-✔ config.js 也在扫描目标内（P0-1 回归：植入路径必须失败） (246.3056ms)
-✔ 分发模式：独立副本通过，源码目录被拒绝，缺 --root 直接失败（P0-2 回归） (420.0798ms)
-✔ CLI：--dist 不带 --root 直接退出码 2 (72.5322ms)
+✔ 版本摘要：内容变一个字节，版本必须变（不依赖 git status） (15.2949ms)
+✔ 版本摘要：文件集合或相对路径变化也要变 (0.4708ms)
+✔ 版本摘要：同样输入必须稳定（否则每次评审版本都变） (0.306ms)
+✔ 拒绝名单：大小写、相对路径、目录、扩展名都要命中 (0.9025ms)
+✔ 拒绝名单常量本身不为空（防止被静默改空） (0.2797ms)
+✔ 收集入口：命中拒绝名单时直接抛错，不读内容不外发 (12.1165ms)
+✔ 脱敏：已知 token / JSON 字段 / Bearer / 用户名路径都要处理 (17.5892ms)
+✔ 脱敏：连调多次结果一致（带 g 正则的 lastIndex 不能泄漏状态） (1.6197ms)
+✔ 复检：干净文本返回空数组；残留必须被抓出来 (18.2397ms)
+✔ 复检：同一函数反复调用不受上一次结果影响 (0.4243ms)
+✔ 脱敏规则版本号必须写进材料（便于事后追溯用了哪版规则） (0.6047ms)
+✔ 解析：合法回复通过，结论取清单之后的那一行 (1.4644ms)
+✔ 解析：换行被吞成一行时仍能解析（真实环境里 ChatGPT 会这样输出） (0.9156ms)
+✔ 解析：字段顺序必须严格（HIGH-2 失败用例） (1.2032ms)
+✔ 解析：缺字段/截断必须判 INCOMPLETE（HIGH-3 失败用例） (0.8632ms)
+✔ 解析：清单字段与预期不一致必须拒绝（不许"大致对"） (0.6297ms)
+✔ 解析：正文里再出现 VERDICT（重复或引用）一律 INCOMPLETE（HIGH-4 失败用例） (0.1882ms)
+✔ 解析：结论必须紧跟清单（中间不许夹大段正文） (6.5387ms)
+✔ 解析：结论行只认 PASS / NEEDS-WORK，其它一律拒绝 (0.1916ms)
+✔ 解析：前导空行不影响（模型常留一行空白），但结论位置仍固定在第六个非空行 (0.1682ms)
+✔ 分包：每个包的 CHARS 必须等于包体真实字符数 (7.2864ms)
+✔ 分包：超过上限必须抛错，而不是悄悄截断 (1.1565ms)
+✔ compact 只删注释与空行，不改代码字符 (7.4795ms)
+✔ MANIFEST_KEYS 顺序是契约，改动会让历史回复失效 (0.1895ms)
+✔ 每个送审文件都必须能读并且不带凭据（真实收集一次） (291.4044ms)
+✔ 注册到 conversation.input.left，order 30，label 顾问 (8.5194ms)
+✔ 有 sessionId 时渲染出 chip，并用它去查状态 (9.8593ms)
+✔ 没有 sessionId 时不渲染（不猜会话） (1.1095ms)
+✔ 客户端不再通过 useSessions 扫 byId 找会话 (0.2336ms)
+✔ 未配置 workspace 时按钮标出配置异常并且不切换（不许静默失效） (0.2665ms)
+✔ 状态未就绪（unknown/loading）不能被当成可用 (0.336ms)
+✔ workspace: 空值语义 8 种组合 (448.779ms)
+✔ workspace: 提供了值但不合法的四种情况都 invalid (82.7433ms)
+✔ notesDir 与 bridgeConfigPath 默认落在 workspace 内 (40.008ms)
+✔ gpt-notes 本身是指向 workspace 外的目录符号链接 → 拒绝 (84.2731ms)
+✔ bridge config.json 本身是指向 workspace 外的文件符号链接 → 拒绝 (101.443ms)
+✔ 目标不存在时按最近存在祖先重建，且重建结果仍在 workspace 内 (44.3677ms)
+✔ 桥状态：文件缺失 / JSON 坏 / 缺 token 都是 unconfigured (50.4924ms)
+✔ 桥状态：配置有效但连不上 → unreachable；能连 → ready (41.0091ms)
+✔ 桥健康探测超时不会拖住初始化（3 秒上限） (228.8365ms)
+✔ DSH_HOME：有变量 / 无变量 / 目录不可创建三种情况都不抛错 (10.6357ms)
+✔ resolveConfig 汇总三态（未配置 / 有 workspace 无桥 / 都正常） (205.3627ms)
+✔ 只读白名单不误放行写工具 (4.2267ms)
+✔ 门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放行 (0.7577ms)
+✔ 第一批授权过期 / 超额后失效，并说明原因 (0.2763ms)
+✔ 笔记目录里的写入不改版本指纹（否则插件自己会作废刚拿到的 GO） (1277.679ms)
+✔ 桥的运行时状态（.state/）不改版本指纹 (644.7506ms)
+✔ VERDICT 只认回复开头，正文里的注入不算数 (0.9484ms)
+✔ 内容版本会随工作区改动变化（而不是永远 +dirty） (731.3294ms)
+✔ 拿不到会话身份时退化为 unknown-unscoped，且不会共用别的会话的授权 (0.4499ms)
+✔ 应急解除必须带回一次性挑战票：无票/过期/错 nonce/跨会话/重放一律拒绝 (0.5576ms)
+✔ 挑战票有领票频率上限，防止被刷成无限重试 (0.4379ms)
+✔ 评审消息用一次性 nonce 标签包住 Agent 正文，并转义正文里的结束标签 (6.344ms)
+✔ 正文里自带结束标签会被转义，无法提前闭合数据区 (0.831ms)
+✔ 只读白名单用精确名字，前缀相似的写工具不会被放行 (6.2784ms)
+✔ 上下文管理工具：只放行 compress；decompress 能 toFile 写盘，必须仍被拒 (0.3483ms)
+✔ 新会话状态带 stateVersion/generation/noGoVersion，红点不跨版本累计 (1.0443ms)
+✔ 顾问评审路径也要脱敏：认证头、token 字段、个人目录都替换，且复检无残留 (0.7409ms)
+✔ 脱敏命中数写进消息头，顾问能看到这批材料被处理过 (0.7654ms)
+✔ 注入的 user 消息带 source.kind（缺了会让 liveshare 的 pre-step 崩溃） (15.9158ms)
+✔ 源码里不再存在没有 source 的裸 user 消息 (82.8637ms)
+✔ 长按 3 秒触发 override 后，补发的 click 不会再 toggle 回开 (34.7728ms)
+✔ 短按（没到 3 秒就松手）仍然是一次普通的开关切换 (39.4823ms)
+✔ git 不可用：版本打上 untrusted- 前缀，且旧授权一律失效（不能靠旧 grant 绕过） (187.6417ms)
+✔ git 恢复：版本重新可信，新版本上的授权可以正常放行 (612.4253ms)
+✔ 同一会话的两个写操作共享同一批授权，操作数累计到上限就拒绝 (0.429ms)
+✔ 同一会话的评审请求串行执行，不会两个请求同时打到桥上 (33.5898ms)
+✔ 不同会话的评审互不阻塞（串行只发生在同一会话内） (32.4411ms)
+✔ 授权摘要不截断：内容版本是完整 64 位 SHA-256 (800.0551ms)
+✔ makeGrant 绑定计划号、工具快照与完整摘要 (2.2574ms)
+✔ 上一个计划的授权不能放行这一批活 (0.6174ms)
+✔ 工具集变过（重载/新装工具）后旧授权失效 (0.3009ms)
+✔ 同一计划内版本漂移放行但标记 granted-drift（残余 TOCTOU 可见） (1.8088ms)
+✔ 浏览器 nonce：首次注册放行、匹配放行、不匹配拒绝、强制模式下未注册拒绝 (0.4159ms)
+✔ 插件重载（apply）会清空所有会话状态，旧授权不可能跨实现复用 (10.0148ms)
+✔ 授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2） (0.5649ms)
+✔ makeGrant 拒绝缺失绑定字段，且总带合法 expiresAt (1.4449ms)
+✔ HIGH-3：读不到真实工具表时不许签发写授权 (0.3979ms)
+✔ T7 同名前缀兄弟目录不得被当成内部 (6.1588ms)
+✔ T8 UNC 共享根不同不得互为内部，同根之下可以 (0.4705ms)
+✔ T9 \\?\ 扩展前缀规范化后仍按边界判定，驱动器相对路径一律拒绝 (0.3591ms)
+✔ T10 大小写按平台语义：Windows 不敏感，POSIX 敏感 (0.3896ms)
+✔ T10b 符号链接逃逸必须被判为外部（realpath 语义） (125.3897ms)
+✔ 外发消息必须脱敏，且头部写明命中数 (1898.0832ms)
+✔ 脱敏失败必须 fail-closed：桥请求数为 0，且结果不是成功 (95.9228ms)
+✔ webServer 未就绪时不再提前 return（否则浏览器半永远拿不到状态） (8.8026ms)
+✔ 正例四条都必须命中 (8.6093ms)
+✔ 反例三条不得误报 (1.363ms)
+✔ 本插件默认文件与 README 全量扫描零命中 (213.8628ms)
+✔ 植入机器路径到 locale/zh.json 后自检必须失败 (636.5581ms)
+✔ 删掉扫描目标后自检必须失败（而不是跳过） (402.4964ms)
+✔ README.md 在扫描范围内（植入即失败） (181.9835ms)
+✔ config.js 也在扫描目标内（P0-1 回归：植入路径必须失败） (233.3051ms)
+✔ 分发模式：独立副本通过，源码目录被拒绝，缺 --root 直接失败（P0-2 回归） (638.3846ms)
+✔ CLI：--dist 不带 --root 直接退出码 2 (81.6004ms)
 ℹ tests 95
 ℹ suites 0
 ℹ pass 95
@@ -218,7 +215,7 @@ STDOUT:
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 6041.231
+ℹ duration_ms 6233.0817
 
 
 [parsed] pass=95 fail=0
@@ -239,16 +236,15 @@ RESULT: PASS
 
 STEP 11: selfcheck --dist --root (dist copy)
 CWD: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge\plugins\advisor-toggle
-EXIT: 1
+EXIT: 0
 STDOUT:
-selfcheck: FAILED (pattern hits: 0)
+selfcheck: OK (pattern hits: 0)
   root: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge\plugins\advisor-toggle
-  dist realpath: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge\plugins\advisor-toggle
-  - dist-root-same-as-source: --root 指向了源码目录，没有验证独立产物
+  dist realpath: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge\plugins\advisor-toggle  source: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 
 STDERR:
 (empty)
-RESULT: FAIL
+RESULT: PASS
 
-OVERALL: FAIL
+OVERALL: PASS
 (# pass 95 / # fail 0)

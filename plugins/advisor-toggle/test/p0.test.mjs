@@ -2,6 +2,11 @@
 // 跑法: node --test test/p0.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const mod = await import('../index.js');
 const { gateDecision, stateOf, contentVersion, makeGrant, nonceIssue, DEFAULTS } = mod.__test;
@@ -132,4 +137,15 @@ test('HIGH-3：读不到真实工具表时不许签发写授权', () => {
 
   // 状态对象默认就是不可信：新会话在没读到工具表之前不能有写授权。
   assert.equal(stateOf('p0-untrusted-default').toolSnapshotTrusted, false)
+})
+
+test('HOST_TOOLS：apply 时缓存句柄，卸载时清理（源码级断言）', async () => {
+  const source = await readFile(join(PLUGIN_DIR, 'index.js'), 'utf8')
+  // 缓存来源必须是宿主服务而不是请求参数：只允许从 ctx.get('tools') 取。
+  assert.match(source, /HOST_TOOLS = tools && typeof tools\.list === 'function' \? tools : null/)
+  // 执行上下文取不到时退回缓存，但读不到真表仍然 trusted=false（HIGH-3 语义不放宽）。
+  assert.match(source, /const tools = ctx\?\.get\?\.\('tools'\) \|\| HOST_TOOLS/)
+  assert.match(source, /if \(typeof tools\?\.list !== 'function'\) return \{ digest: ADVISOR_ONLY_SNAPSHOT, trusted: false/)
+  // 生命周期：卸载时必须清空缓存句柄，避免旧服务被当成现役。
+  assert.match(source, /ctx\.effect\(\(\) => \(\) => \{\s*HOST_TOOLS = null\s*\}\)/)
 })

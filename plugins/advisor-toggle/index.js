@@ -974,6 +974,11 @@ export function apply(ctx, rawConfig = {}) {
 
   const tools = ctx.get?.('tools')
   HOST_TOOLS = tools && typeof tools.list === 'function' ? tools : null
+  // 生命周期：插件卸载时必须把缓存句柄清掉，否则宿主换掉 tools 服务后仍可能被旧句柄冒充。
+  // 重载时 apply 会先重新赋值（覆盖旧值），这里补的是"卸载"这一侧。
+  ctx.effect(() => () => {
+    HOST_TOOLS = null
+  })
   if (tools?.register) {
     ctx.effect(() =>
       tools.register(
