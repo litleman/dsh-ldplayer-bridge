@@ -54,15 +54,34 @@ const dirty = run('git', ['status', '--porcelain', '--', '.'], PLUGIN_DIR)
 record('git rev-parse HEAD (source version)', { cwd: PLUGIN_DIR, exit: head.code, stdout: head.stdout.trim(), result: head.code === 0 ? 'PASS' : 'FAIL' })
 record('git status --porcelain plugins/advisor-toggle', { cwd: PLUGIN_DIR, exit: dirty.code, stdout: dirty.stdout.trim() || '(clean)', result: dirty.code === 0 ? 'PASS' : 'FAIL' })
 
-// ---- C. 27 文件清单（以公开仓库 HEAD 为准） ----
+// ---- C. 分发文件清单（以公开仓库 HEAD 为准） ----
+// 清单里的文件数不是常量：插件自己会新增脚本/文档。用"工作副本实际文件集"来比对，
+// 而不是写死 27——写死会让加文件后的采集无端 FAIL，也会掩盖"分发包缺文件"。
 const listed = run('git', ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'plugins/advisor-toggle'], DIST_REPO)
 const manifest = listed.stdout.split(/\r?\n/).filter(Boolean).map((p) => p.replace(/^plugins\/advisor-toggle\//, '')).sort()
-record('git ls-tree manifest (dist repo HEAD)', { cwd: DIST_REPO, exit: listed.code, stdout: `${manifest.length} files`, result: manifest.length === 27 ? 'PASS' : 'FAIL' })
+const localFiles = (await walk(PLUGIN_DIR)).sort()
+const setDiff = [
+  ...localFiles.filter((f) => !manifest.includes(f)).map((f) => `NOT-IN-HEAD: ${f}`),
+  ...manifest.filter((f) => !localFiles.includes(f)).map((f) => `NOT-IN-WORKTREE: ${f}`),
+]
+record('git ls-tree manifest (dist repo HEAD)', {
+  cwd: DIST_REPO,
+  exit: listed.code,
+  stdout: `${manifest.length} files in HEAD / ${localFiles.length} files in worktree`,
+  stderr: setDiff.length ? setDiff.join('\n') : '(file sets identical)',
+  result: listed.code === 0 && manifest.length > 0 && setDiff.length === 0 ? 'PASS' : 'FAIL',
+})
 
 // ---- D. 哈希对照 ----
+// 证据文件本身是这份报告的产物：每次生成都会变，不能拿它自己跟自己比。
+const GENERATED = new Set(['docs/dist-evidence.txt'])
 const rows = []
 let hashBad = 0
 for (const rel of manifest) {
+  if (GENERATED.has(rel)) {
+    rows.push(`${rel}\t(generated)\t-\tSKIP`)
+    continue
+  }
   const srcHash = fileHash(join(PLUGIN_DIR, rel))
   const distHash = fileHash(join(DIST_DIR, rel))
   const ok = Boolean(srcHash) && srcHash === distHash
@@ -72,7 +91,7 @@ for (const rel of manifest) {
 const distFiles = (await walk(DIST_DIR)).sort()
 const extras = distFiles.filter((f) => !manifest.includes(f))
 const missingInDist = manifest.filter((f) => !distFiles.includes(f))
-record('hash compare (27 manifest files)', {
+record('hash compare (dist manifest files)', {
   cwd: PLUGIN_DIR,
   exit: hashBad,
   stdout: rows.join('\n'),
