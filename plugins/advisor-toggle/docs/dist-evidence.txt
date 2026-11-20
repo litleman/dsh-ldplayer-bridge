@@ -1,8 +1,8 @@
 advisor-toggle 分发证据（自动采集）
-采集时间: 2026-11-20T07:36:47.479Z
+采集时间: 2026-11-20T07:43:21.384Z
 工作副本: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 分发副本: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge\plugins\advisor-toggle
-清单文件数: 32
+清单文件数: 34
 
 STEP 1: node --check index.js
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
@@ -44,7 +44,7 @@ STEP 5: git status --porcelain plugins/advisor-toggle
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 EXIT: 0
 STDOUT:
-(clean)
+M plugins/advisor-toggle/docs/dist-evidence.txt
 STDERR:
 (empty)
 RESULT: PASS
@@ -53,11 +53,10 @@ STEP 6: git ls-tree manifest (dist repo HEAD)
 CWD: D:\Administrator\allWorkFiles\Work\dsh-ldplayer-bridge
 EXIT: 0
 STDOUT:
-32 files in HEAD / 34 files in worktree
+34 files in HEAD / 34 files in worktree
 STDERR:
-NOT-IN-HEAD: test/autooff.test.mjs
-NOT-IN-HEAD: test/unreachable.test.mjs
-RESULT: FAIL
+(file sets identical)
+RESULT: PASS
 
 STEP 7: hash compare (dist manifest files)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
@@ -81,6 +80,7 @@ scripts/collect-evidence.mjs	5ba0fab6fafc642c01e7663ec22d5e95d6e9721435d4957faf2
 scripts/selfcheck.mjs	f89e443e24f0e4c6052d2c779a92f4bc7be52e8a76873c0a1508cbb6069e2208	f89e443e24f0e4c6052d2c779a92f4bc7be52e8a76873c0a1508cbb6069e2208	MATCH
 scripts/verify-restart.mjs	f2068b9ffe77161f51ea2ced22599a8e8ef24763ba109bc2c523db97577294f4	f2068b9ffe77161f51ea2ced22599a8e8ef24763ba109bc2c523db97577294f4	MATCH
 test/audit.test.mjs	7e84e8af34b12090f99b159fff7d62414805f062e893806613448e596f3093fb	7e84e8af34b12090f99b159fff7d62414805f062e893806613448e596f3093fb	MATCH
+test/autooff.test.mjs	63012f4b4ef563b432fe8c5d3df5bde69c72a26e5cf8aa39b46fadcf5bb4057f	63012f4b4ef563b432fe8c5d3df5bde69c72a26e5cf8aa39b46fadcf5bb4057f	MATCH
 test/c2-real-cordis.test.mjs	e692d1e94e6c93c42a79d12c81f514f62b3963a3cb2f05014f01ec8c39241d2b	e692d1e94e6c93c42a79d12c81f514f62b3963a3cb2f05014f01ec8c39241d2b	MATCH
 test/client.test.mjs	445828b006c53656f7a96f63d1ce02d077ea4673917abd04a1ec23e73db31634	445828b006c53656f7a96f63d1ce02d077ea4673917abd04a1ec23e73db31634	MATCH
 test/config.test.mjs	57cf39734cd361f93379f8eaf307130ea774ffbf3555193076d4697fb7161ddd	57cf39734cd361f93379f8eaf307130ea774ffbf3555193076d4697fb7161ddd	MATCH
@@ -94,11 +94,12 @@ test/path-inside.test.mjs	f61cde92362998068d007849332bde291b03fbb797649a472f2b83
 test/review-redaction.test.mjs	b0d0736c9705f4608138a304a6e562c1a4f329a03cbad8889ba2cd46f4c44253	b0d0736c9705f4608138a304a6e562c1a4f329a03cbad8889ba2cd46f4c44253	MATCH
 test/route-retry.test.mjs	499419b3a12c839906543806dad093c22799d3cbf77a1e97fd690728cedc2693	499419b3a12c839906543806dad093c22799d3cbf77a1e97fd690728cedc2693	MATCH
 test/selfcheck.test.mjs	0ef6368740fdfd581e8094730772673bf09c29671068dd3a26d72792be0f7fe1	0ef6368740fdfd581e8094730772673bf09c29671068dd3a26d72792be0f7fe1	MATCH
+test/unreachable.test.mjs	5bdcba49202c24ef3453a00f32d69f08f8d26473d13ea5675ac86f44427d889d	5bdcba49202c24ef3453a00f32d69f08f8d26473d13ea5675ac86f44427d889d	MATCH
 tools/audit.mjs	cd628b596002700645015782225df72d24f2cc346aff3bda4536832d2b6d4480	cd628b596002700645015782225df72d24f2cc346aff3bda4536832d2b6d4480	MATCH
 STDERR:
-EXTRA-FILES: test/autooff.test.mjs, test/unreachable.test.mjs
+EXTRA-FILES: none
 MISSING: none
-RESULT: FAIL
+RESULT: PASS
 
 STEP 8: config.js three states (isolated env, fake health server)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
@@ -115,114 +116,114 @@ STEP 9: node --test (16 files)
 CWD: D:\Administrator\allWorkFiles\ds-workspace\plugins\advisor-toggle
 EXIT: 0
 STDOUT:
-✔ 版本摘要：内容变一个字节，版本必须变（不依赖 git status） (2.9705ms)
-✔ 版本摘要：文件集合或相对路径变化也要变 (0.5316ms)
-✔ 版本摘要：同样输入必须稳定（否则每次评审版本都变） (0.2384ms)
-✔ 拒绝名单：大小写、相对路径、目录、扩展名都要命中 (0.8423ms)
-✔ 拒绝名单常量本身不为空（防止被静默改空） (0.3471ms)
-✔ 收集入口：命中拒绝名单时直接抛错，不读内容不外发 (0.9728ms)
-✔ 脱敏：已知 token / JSON 字段 / Bearer / 用户名路径都要处理 (0.9745ms)
-✔ 脱敏：连调多次结果一致（带 g 正则的 lastIndex 不能泄漏状态） (1.0525ms)
-✔ 复检：干净文本返回空数组；残留必须被抓出来 (0.7648ms)
-✔ 复检：同一函数反复调用不受上一次结果影响 (0.4457ms)
-✔ 脱敏规则版本号必须写进材料（便于事后追溯用了哪版规则） (0.4256ms)
-✔ 解析：合法回复通过，结论取清单之后的那一行 (1.4711ms)
-✔ 解析：换行被吞成一行时仍能解析（真实环境里 ChatGPT 会这样输出） (1.0678ms)
-✔ 解析：字段顺序必须严格（HIGH-2 失败用例） (0.5907ms)
-✔ 解析：缺字段/截断必须判 INCOMPLETE（HIGH-3 失败用例） (0.4885ms)
-✔ 解析：清单字段与预期不一致必须拒绝（不许"大致对"） (0.4364ms)
-✔ 解析：正文里再出现 VERDICT（重复或引用）一律 INCOMPLETE（HIGH-4 失败用例） (0.1302ms)
-✔ 解析：结论必须紧跟清单（中间不许夹大段正文） (0.2308ms)
-✔ 解析：结论行只认 PASS / NEEDS-WORK，其它一律拒绝 (0.1203ms)
-✔ 解析：前导空行不影响（模型常留一行空白），但结论位置仍固定在第六个非空行 (0.0986ms)
-✔ 分包：每个包的 CHARS 必须等于包体真实字符数 (1.1122ms)
-✔ 分包：超过上限必须抛错，而不是悄悄截断 (0.8522ms)
-✔ compact 只删注释与空行，不改代码字符 (0.3911ms)
-✔ MANIFEST_KEYS 顺序是契约，改动会让历史回复失效 (0.1269ms)
-✔ 每个送审文件都必须能读并且不带凭据（真实收集一次） (29.6191ms)
-✔ HOLD/NO-GO 是正常结论：不计故障、不触发自动关闭 (4718.217ms)
-✔ 拿到有效结论即清零之前累计的故障 (4668.9342ms)
-✔ 协议故障（能跑完但解析不出 VERDICT）也会累计并在阈值处退出保护 (4693.7901ms)
-✔ 会话隔离：一个会话的故障不影响另一个会话的开关 (4700.025ms)
-✔ 自动关闭后门禁确实退出（写工具不再被拦），且状态可被外部读到 (0.6117ms)
-✔ 重载（新会话状态）默认是关，不会静默恢复成开启 (0.1334ms)
-✔ 回执话术：区分桥接故障与"保护已退出" (0.2658ms)
-✔ C2：真实 Cordis 上下文里替换 tools 服务，resolveTools() 立即看到新服务 (23.0046ms)
-✔ R3：卸载只清自己的绑定，不误清另一个实例的上下文 (1.9426ms)
-✔ 注册到 conversation.input.left，order 30，label 顾问 (2.4728ms)
-✔ 有 sessionId 时渲染出 chip，并用它去查状态 (1.6646ms)
-✔ 没有 sessionId 时不渲染（不猜会话） (1.013ms)
-✔ 客户端不再通过 useSessions 扫 byId 找会话 (0.2261ms)
-✔ 未配置 workspace 时按钮标出配置异常并且不切换（不许静默失效） (0.2193ms)
-✔ 状态未就绪（unknown/loading）不能被当成可用 (0.1923ms)
-✔ workspace: 空值语义 8 种组合 (19.7044ms)
-✔ workspace: 提供了值但不合法的四种情况都 invalid (25.8244ms)
-✔ notesDir 与 bridgeConfigPath 默认落在 workspace 内 (15.7885ms)
-✔ gpt-notes 本身是指向 workspace 外的目录符号链接 → 拒绝 (7.6076ms)
-✔ bridge config.json 本身是指向 workspace 外的文件符号链接 → 拒绝 (12.1761ms)
-✔ 目标不存在时按最近存在祖先重建，且重建结果仍在 workspace 内 (4.4179ms)
-✔ 桥状态：文件缺失 / JSON 坏 / 缺 token 都是 unconfigured (21.6878ms)
-✔ 桥状态：配置有效但连不上 → unreachable；能连 → ready (15.288ms)
-✔ 桥健康探测超时不会拖住初始化（3 秒上限） (205.164ms)
-✔ DSH_HOME：有变量 / 无变量 / 目录不可创建三种情况都不抛错 (2.7315ms)
-✔ resolveConfig 汇总三态（未配置 / 有 workspace 无桥 / 都正常） (8.8812ms)
-✔ 只读白名单不误放行写工具 (1.0516ms)
-✔ 门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放行 (0.7011ms)
-✔ 第一批授权过期 / 超额后失效，并说明原因 (0.3116ms)
-✔ 笔记目录里的写入不改版本指纹（否则插件自己会作废刚拿到的 GO） (484.541ms)
-✔ 桥的运行时状态（.state/）不改版本指纹 (379.6697ms)
-✔ VERDICT 只认回复开头，正文里的注入不算数 (0.5388ms)
-✔ 内容版本会随工作区改动变化（而不是永远 +dirty） (357.3104ms)
-✔ 拿不到会话身份时退化为 unknown-unscoped，且不会共用别的会话的授权 (0.2772ms)
-✔ 应急解除必须带回一次性挑战票：无票/过期/错 nonce/跨会话/重放一律拒绝 (0.3328ms)
-✔ 挑战票有领票频率上限，防止被刷成无限重试 (0.2514ms)
-✔ 评审消息用一次性 nonce 标签包住 Agent 正文，并转义正文里的结束标签 (3.1939ms)
-✔ 正文里自带结束标签会被转义，无法提前闭合数据区 (0.7016ms)
-✔ 只读白名单用精确名字，前缀相似的写工具不会被放行 (0.299ms)
-✔ 上下文管理工具：只放行 compress；decompress 能 toFile 写盘，必须仍被拒 (0.1742ms)
-✔ 新会话状态带 stateVersion/generation/noGoVersion，红点不跨版本累计 (0.2774ms)
-✔ 顾问评审路径也要脱敏：认证头、token 字段、个人目录都替换，且复检无残留 (0.4523ms)
-✔ 脱敏命中数写进消息头，顾问能看到这批材料被处理过 (0.7369ms)
-✔ 注入的 user 消息带 source.kind（缺了会让 liveshare 的 pre-step 崩溃） (1.786ms)
-✔ 源码里不再存在没有 source 的裸 user 消息 (4.9762ms)
-✔ 长按 3 秒触发 override 后，补发的 click 不会再 toggle 回开 (7.2575ms)
-✔ 短按（没到 3 秒就松手）仍然是一次普通的开关切换 (4.59ms)
-✔ git 不可用：版本打上 untrusted- 前缀，且旧授权一律失效（不能靠旧 grant 绕过） (61.6953ms)
-✔ git 恢复：版本重新可信，新版本上的授权可以正常放行 (213.4619ms)
-✔ 同一会话的两个写操作共享同一批授权，操作数累计到上限就拒绝 (0.3844ms)
-✔ 同一会话的评审请求串行执行，不会两个请求同时打到桥上 (33.3123ms)
-✔ 不同会话的评审互不阻塞（串行只发生在同一会话内） (30.3528ms)
-✔ 授权摘要不截断：内容版本是完整 64 位 SHA-256 (224.7186ms)
-✔ makeGrant 绑定计划号、工具快照与完整摘要 (0.5853ms)
-✔ 上一个计划的授权不能放行这一批活 (0.3428ms)
-✔ 工具集变过（重载/新装工具）后旧授权失效 (0.1534ms)
-✔ 同一计划内版本漂移放行但标记 granted-drift（残余 TOCTOU 可见） (0.1342ms)
-✔ 浏览器 nonce：首次注册放行、匹配放行、不匹配拒绝、强制模式下未注册拒绝 (0.2027ms)
-✔ 插件重载（apply）会清空所有会话状态，旧授权不可能跨实现复用 (1.7289ms)
-✔ 授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2） (0.2875ms)
-✔ makeGrant 拒绝缺失绑定字段，且总带合法 expiresAt (0.5361ms)
-✔ HIGH-3：读不到真实工具表时不许签发写授权 (0.246ms)
-✔ C4：只认宿主上下文里的 tools，且每次现取（旧服务不被采用） (0.3538ms)
-✔ R2：写前复核工具集——每次写都重取，变了就作废本批授权 (0.3596ms)
-✔ T7 同名前缀兄弟目录不得被当成内部 (1.449ms)
-✔ T8 UNC 共享根不同不得互为内部，同根之下可以 (0.3561ms)
-✔ T9 \\?\ 扩展前缀规范化后仍按边界判定，驱动器相对路径一律拒绝 (0.2894ms)
-✔ T10 大小写按平台语义：Windows 不敏感，POSIX 敏感 (0.1922ms)
-✔ T10b 符号链接逃逸必须被判为外部（realpath 语义） (13.6455ms)
-✔ 外发消息必须脱敏，且头部写明命中数 (1623.9432ms)
-✔ 脱敏失败必须 fail-closed：桥请求数为 0，且结果不是成功 (48.7704ms)
-✔ webServer 未就绪时不再提前 return（否则浏览器半永远拿不到状态） (1.359ms)
-✔ 正例四条都必须命中 (1.587ms)
-✔ 反例三条不得误报 (0.8222ms)
-✔ 本插件默认文件与 README 全量扫描零命中 (12.574ms)
-✔ 植入机器路径到 locale/zh.json 后自检必须失败 (189.835ms)
-✔ 删掉扫描目标后自检必须失败（而不是跳过） (111.5271ms)
-✔ README.md 在扫描范围内（植入即失败） (84.6773ms)
-✔ config.js 也在扫描目标内（P0-1 回归：植入路径必须失败） (113.5031ms)
-✔ 分发模式：独立副本通过，源码目录被拒绝，缺 --root 直接失败（P0-2 回归） (235.8049ms)
-✔ CLI：--dist 不带 --root 直接退出码 2 (47.4209ms)
-✔ 顾问不可达：工具回执里必须能看到真实失败原因与排查步骤 (1.0805ms)
-✔ 顾问不可达：连续 3 次失败自动关掉开关，并标明 autoOff (4699.8569ms)
+✔ 版本摘要：内容变一个字节，版本必须变（不依赖 git status） (3.561ms)
+✔ 版本摘要：文件集合或相对路径变化也要变 (0.4246ms)
+✔ 版本摘要：同样输入必须稳定（否则每次评审版本都变） (0.229ms)
+✔ 拒绝名单：大小写、相对路径、目录、扩展名都要命中 (0.9935ms)
+✔ 拒绝名单常量本身不为空（防止被静默改空） (0.2424ms)
+✔ 收集入口：命中拒绝名单时直接抛错，不读内容不外发 (0.9088ms)
+✔ 脱敏：已知 token / JSON 字段 / Bearer / 用户名路径都要处理 (0.8477ms)
+✔ 脱敏：连调多次结果一致（带 g 正则的 lastIndex 不能泄漏状态） (1.1224ms)
+✔ 复检：干净文本返回空数组；残留必须被抓出来 (0.9225ms)
+✔ 复检：同一函数反复调用不受上一次结果影响 (0.379ms)
+✔ 脱敏规则版本号必须写进材料（便于事后追溯用了哪版规则） (0.4658ms)
+✔ 解析：合法回复通过，结论取清单之后的那一行 (1.1697ms)
+✔ 解析：换行被吞成一行时仍能解析（真实环境里 ChatGPT 会这样输出） (1.1241ms)
+✔ 解析：字段顺序必须严格（HIGH-2 失败用例） (0.6431ms)
+✔ 解析：缺字段/截断必须判 INCOMPLETE（HIGH-3 失败用例） (0.3993ms)
+✔ 解析：清单字段与预期不一致必须拒绝（不许"大致对"） (0.4731ms)
+✔ 解析：正文里再出现 VERDICT（重复或引用）一律 INCOMPLETE（HIGH-4 失败用例） (0.1703ms)
+✔ 解析：结论必须紧跟清单（中间不许夹大段正文） (0.2839ms)
+✔ 解析：结论行只认 PASS / NEEDS-WORK，其它一律拒绝 (0.1341ms)
+✔ 解析：前导空行不影响（模型常留一行空白），但结论位置仍固定在第六个非空行 (0.1326ms)
+✔ 分包：每个包的 CHARS 必须等于包体真实字符数 (1.2912ms)
+✔ 分包：超过上限必须抛错，而不是悄悄截断 (0.9802ms)
+✔ compact 只删注释与空行，不改代码字符 (0.2856ms)
+✔ MANIFEST_KEYS 顺序是契约，改动会让历史回复失效 (0.1063ms)
+✔ 每个送审文件都必须能读并且不带凭据（真实收集一次） (21.0365ms)
+✔ HOLD/NO-GO 是正常结论：不计故障、不触发自动关闭 (4730.0221ms)
+✔ 拿到有效结论即清零之前累计的故障 (4651.6159ms)
+✔ 协议故障（能跑完但解析不出 VERDICT）也会累计并在阈值处退出保护 (4634.8045ms)
+✔ 会话隔离：一个会话的故障不影响另一个会话的开关 (4616.0603ms)
+✔ 自动关闭后门禁确实退出（写工具不再被拦），且状态可被外部读到 (0.3652ms)
+✔ 重载（新会话状态）默认是关，不会静默恢复成开启 (0.0887ms)
+✔ 回执话术：区分桥接故障与"保护已退出" (0.1382ms)
+✔ C2：真实 Cordis 上下文里替换 tools 服务，resolveTools() 立即看到新服务 (21.1852ms)
+✔ R3：卸载只清自己的绑定，不误清另一个实例的上下文 (1.9634ms)
+✔ 注册到 conversation.input.left，order 30，label 顾问 (2.999ms)
+✔ 有 sessionId 时渲染出 chip，并用它去查状态 (1.945ms)
+✔ 没有 sessionId 时不渲染（不猜会话） (1.0046ms)
+✔ 客户端不再通过 useSessions 扫 byId 找会话 (0.193ms)
+✔ 未配置 workspace 时按钮标出配置异常并且不切换（不许静默失效） (0.2069ms)
+✔ 状态未就绪（unknown/loading）不能被当成可用 (0.1605ms)
+✔ workspace: 空值语义 8 种组合 (34.1397ms)
+✔ workspace: 提供了值但不合法的四种情况都 invalid (26.1177ms)
+✔ notesDir 与 bridgeConfigPath 默认落在 workspace 内 (10.6481ms)
+✔ gpt-notes 本身是指向 workspace 外的目录符号链接 → 拒绝 (5.4011ms)
+✔ bridge config.json 本身是指向 workspace 外的文件符号链接 → 拒绝 (8.1393ms)
+✔ 目标不存在时按最近存在祖先重建，且重建结果仍在 workspace 内 (4.0472ms)
+✔ 桥状态：文件缺失 / JSON 坏 / 缺 token 都是 unconfigured (8.1627ms)
+✔ 桥状态：配置有效但连不上 → unreachable；能连 → ready (15.226ms)
+✔ 桥健康探测超时不会拖住初始化（3 秒上限） (205.2334ms)
+✔ DSH_HOME：有变量 / 无变量 / 目录不可创建三种情况都不抛错 (2.927ms)
+✔ resolveConfig 汇总三态（未配置 / 有 workspace 无桥 / 都正常） (8.7795ms)
+✔ 只读白名单不误放行写工具 (1.0895ms)
+✔ 门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放行 (0.7396ms)
+✔ 第一批授权过期 / 超额后失效，并说明原因 (0.337ms)
+✔ 笔记目录里的写入不改版本指纹（否则插件自己会作废刚拿到的 GO） (518.7663ms)
+✔ 桥的运行时状态（.state/）不改版本指纹 (384.7504ms)
+✔ VERDICT 只认回复开头，正文里的注入不算数 (0.5759ms)
+✔ 内容版本会随工作区改动变化（而不是永远 +dirty） (360.3318ms)
+✔ 拿不到会话身份时退化为 unknown-unscoped，且不会共用别的会话的授权 (0.2726ms)
+✔ 应急解除必须带回一次性挑战票：无票/过期/错 nonce/跨会话/重放一律拒绝 (0.3244ms)
+✔ 挑战票有领票频率上限，防止被刷成无限重试 (0.2276ms)
+✔ 评审消息用一次性 nonce 标签包住 Agent 正文，并转义正文里的结束标签 (2.0259ms)
+✔ 正文里自带结束标签会被转义，无法提前闭合数据区 (0.5349ms)
+✔ 只读白名单用精确名字，前缀相似的写工具不会被放行 (0.2216ms)
+✔ 上下文管理工具：只放行 compress；decompress 能 toFile 写盘，必须仍被拒 (0.1423ms)
+✔ 新会话状态带 stateVersion/generation/noGoVersion，红点不跨版本累计 (0.237ms)
+✔ 顾问评审路径也要脱敏：认证头、token 字段、个人目录都替换，且复检无残留 (0.4177ms)
+✔ 脱敏命中数写进消息头，顾问能看到这批材料被处理过 (0.6212ms)
+✔ 注入的 user 消息带 source.kind（缺了会让 liveshare 的 pre-step 崩溃） (2.0723ms)
+✔ 源码里不再存在没有 source 的裸 user 消息 (7.1152ms)
+✔ 长按 3 秒触发 override 后，补发的 click 不会再 toggle 回开 (8.023ms)
+✔ 短按（没到 3 秒就松手）仍然是一次普通的开关切换 (4.3941ms)
+✔ git 不可用：版本打上 untrusted- 前缀，且旧授权一律失效（不能靠旧 grant 绕过） (62.0148ms)
+✔ git 恢复：版本重新可信，新版本上的授权可以正常放行 (238.2866ms)
+✔ 同一会话的两个写操作共享同一批授权，操作数累计到上限就拒绝 (0.2807ms)
+✔ 同一会话的评审请求串行执行，不会两个请求同时打到桥上 (32.6772ms)
+✔ 不同会话的评审互不阻塞（串行只发生在同一会话内） (30.913ms)
+✔ 授权摘要不截断：内容版本是完整 64 位 SHA-256 (248.6061ms)
+✔ makeGrant 绑定计划号、工具快照与完整摘要 (0.8205ms)
+✔ 上一个计划的授权不能放行这一批活 (0.4606ms)
+✔ 工具集变过（重载/新装工具）后旧授权失效 (0.2053ms)
+✔ 同一计划内版本漂移放行但标记 granted-drift（残余 TOCTOU 可见） (0.198ms)
+✔ 浏览器 nonce：首次注册放行、匹配放行、不匹配拒绝、强制模式下未注册拒绝 (0.2151ms)
+✔ 插件重载（apply）会清空所有会话状态，旧授权不可能跨实现复用 (1.9721ms)
+✔ 授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2） (0.3939ms)
+✔ makeGrant 拒绝缺失绑定字段，且总带合法 expiresAt (0.7103ms)
+✔ HIGH-3：读不到真实工具表时不许签发写授权 (0.3036ms)
+✔ C4：只认宿主上下文里的 tools，且每次现取（旧服务不被采用） (0.4595ms)
+✔ R2：写前复核工具集——每次写都重取，变了就作废本批授权 (0.5463ms)
+✔ T7 同名前缀兄弟目录不得被当成内部 (1.5279ms)
+✔ T8 UNC 共享根不同不得互为内部，同根之下可以 (0.3433ms)
+✔ T9 \\?\ 扩展前缀规范化后仍按边界判定，驱动器相对路径一律拒绝 (0.298ms)
+✔ T10 大小写按平台语义：Windows 不敏感，POSIX 敏感 (0.1978ms)
+✔ T10b 符号链接逃逸必须被判为外部（realpath 语义） (16.6771ms)
+✔ 外发消息必须脱敏，且头部写明命中数 (1631.8541ms)
+✔ 脱敏失败必须 fail-closed：桥请求数为 0，且结果不是成功 (46.9513ms)
+✔ webServer 未就绪时不再提前 return（否则浏览器半永远拿不到状态） (1.2963ms)
+✔ 正例四条都必须命中 (1.6048ms)
+✔ 反例三条不得误报 (0.85ms)
+✔ 本插件默认文件与 README 全量扫描零命中 (11.8831ms)
+✔ 植入机器路径到 locale/zh.json 后自检必须失败 (137.7775ms)
+✔ 删掉扫描目标后自检必须失败（而不是跳过） (106.5429ms)
+✔ README.md 在扫描范围内（植入即失败） (107.3259ms)
+✔ config.js 也在扫描目标内（P0-1 回归：植入路径必须失败） (117.0848ms)
+✔ 分发模式：独立副本通过，源码目录被拒绝，缺 --root 直接失败（P0-2 回归） (248.9952ms)
+✔ CLI：--dist 不带 --root 直接退出码 2 (49.4382ms)
+✔ 顾问不可达：工具回执里必须能看到真实失败原因与排查步骤 (1.1939ms)
+✔ 顾问不可达：连续 3 次失败自动关掉开关，并标明 autoOff (4701.6306ms)
 ℹ tests 108
 ℹ suites 0
 ℹ pass 108
@@ -230,7 +231,7 @@ STDOUT:
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 18909.7914
+ℹ duration_ms 18754.0291
 
 
 [parsed] pass=108 fail=0
@@ -261,5 +262,5 @@ STDERR:
 (empty)
 RESULT: PASS
 
-OVERALL: FAIL
+OVERALL: PASS
 (# pass 108 / # fail 0)
