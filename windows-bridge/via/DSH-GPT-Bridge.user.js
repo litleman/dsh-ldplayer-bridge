@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DSH GPT Bridge (Via)
 // @namespace    https://local.dsh-bridge/
-// @version      0.2.8
+// @version      0.3.1
 // @description  Connect the ChatGPT page inside Via Browser to the local DeepSeekHarness bridge (polling task queue).
 // @author       DSH Bridge Project
 // @match        https://chatgpt.com/*
@@ -22,7 +22,7 @@
   const BRIDGE_BASE = "__BRIDGE_BASE__";
   const BRIDGE_TOKEN = "__BRIDGE_TOKEN__";
   const CLIENT_ID = "__CLIENT_ID__";
-  const SCRIPT_VERSION = "0.2.8";
+  const SCRIPT_VERSION = "0.3.1";
 
   const POLL_INTERVAL_MS = 1800;
   const REQUEST_TIMEOUT_MS = 12000;
@@ -409,7 +409,7 @@
     let stableSince = 0;
 
     while (Date.now() - startedAt < budgetMs) {
-      await sleep(700);
+      await sleep(500);
       const node = lastNode();
       const current = nodeText(node);
       const currentId = node ? (node.getAttribute("data-message-id") || "") : "";
@@ -424,17 +424,31 @@
         limitError.code = "chat_limit";
         throw limitError;
       }
-      if (isGenerating()) stableSince = 0;
-      if (sawNew && current) {
+      // 发送本身已经确认过（草稿离开输入框），所以这里不再强依赖"比基线多一条"：
+      // 这个 WebView 的节点计数/文本会抖动，旧逻辑（sawNew + 2.6 秒静默）在新建对话后
+      // 常常一次都凑不齐，最后只能超时（2026-11-19 实测）。
+      // 新判据：最后一条有正文 + 当前不在生成 + 正文稳定 1.2 秒。
+      const generating = isGenerating();
+      if (current) {
         if (current !== previous) {
           previous = current;
           stableSince = Date.now();
-        } else if (!isGenerating() && stableSince && Date.now() - stableSince >= QUIET_STABLE_MS) {
+        } else if (!generating && stableSince && Date.now() - stableSince >= 1200) {
           return current.slice(0, MAX_REPLY_CHARS);
         }
       }
     }
-    throw new Error("等待回复超时；可能仍在生成、请求失败，或回复节点选择器已变化。");
+    const diag = JSON.stringify({
+      url: location.pathname,
+      assistants: assistantNodes().length,
+      baseline: baselineCount,
+      saw_new: sawNew,
+      last_len: lastText().length,
+      generating: isGenerating(),
+      composer: Boolean(findComposer()),
+      limit: pageSaysLimit()
+    });
+    throw new Error("WAIT_REPLY_TIMEOUT：" + diag);
   }
 
   function pageState() {
@@ -461,6 +475,11 @@
         chars: text.length,
         users: document.querySelectorAll("[data-message-author-role='user']").length,
         assistants: assistantNodes().length,
+        // 诊断用：最后一条助手消息抽出来的文本有多长、开头是什么、生成态判定结果。
+        last_len: lastText().length,
+        last_head: lastText().slice(0, 80),
+        generating: isGenerating(),
+        composer: Boolean(findComposer()),
         limit: pageSaysLimit(),
         version: SCRIPT_VERSION
       });

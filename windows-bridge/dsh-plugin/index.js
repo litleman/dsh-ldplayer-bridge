@@ -226,10 +226,12 @@ async function servedUserscript(bridgeConfig) {
  */
 const VIA_UPDATE_TAPS = [
   { x: 1851, y: 80, label: "打开菜单" },
-  { x: 1852, y: 391, label: "进入设置" },
-  { x: 600, y: 727, label: "进入脚本" },
+  { x: 1856, y: 366, label: "进入设置" },
+  { x: 600, y: 729, label: "进入脚本" },
   { x: 1871, y: 90, label: "点更新" },
-  { x: 1166, y: 699, label: "确认更新" }
+  // 「确定」在更新弹窗的右下角，y≈665（不是 699：699 落在按钮下方的空白里，
+  // 点了等于什么都没发生，脚本永远停在旧版本——2026-11-19 实测踩到）。
+  { x: 1165, y: 665, label: "确认更新" }
 ];
 
 async function installedScriptVersion(bridgeDir) {
