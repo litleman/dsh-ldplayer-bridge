@@ -44,6 +44,10 @@ const DEFAULTS = {
   // 只在 onAdvisorUnreachable=degrade 时生效；block 就是 block，不许被连续拦截自动改写（对抗评审 HIGH-4）。
   selfLockDenies: 8,
   autoRecover: true,
+  // 顾问连续不可达这么多次就自动关掉开关：开关本身是"顾问能评审"的前提，
+  // 顾问挂了还锁着门只会把人一起锁在外面（2026-11-19 发生在另一个会话的真实事故）。
+  // 关掉是可见状态（胶囊变灰），不是静默放行；设 0 可关闭这个兜底。
+  autoOffAfterFailures: 3,
   deliveryReminder: true,
   // 一次 GO 授权的有效期与用量上限：GO 批的是「这一批活」，不是永久通行证（对抗评审 HIGH-1/MED-7）。
   grantTtlMs: 30 * 60 * 1000,
@@ -145,6 +149,12 @@ function stateOf(sessionId) {
       degradedAt: 0,
       lastFailureAt: 0,
       lastError: '',
+      // 故障计数（会话级）：桥接故障与协议故障分开记，合并算 faultStreak。
+      // 达到 autoOffAfterFailures 就退出评审保护（不是"降级放行"，是保护关闭）。
+      bridgeFaults: 0,
+      protocolFaults: 0,
+      faultStreak: 0,
+      autoOffReason: '',
       // 前端乐观并发用：每次状态变更 +1，客户端提交时带上它，服务端比较后再写。
       stateVersion: 0,
       // 授权代际：每次 toggle/override 递增，迟到的评审结果不得用于新代际。
@@ -758,13 +768,76 @@ async function reviewLocked(ctx, exec, sessionId, state, phase, message) {
     }
   }
 
-  if (task.status !== 'succeeded') {
+  // 故障分两类，合并计数：桥接类（任务没跑完）与协议类（跑完了但解析不出结论）。
+  // 正常的 GO/HOLD/NO-GO 一律清零——它们是"评审在工作"的证据，不是故障。
+  const fault = (kind, detail) => {
     state.lastFailureAt = Date.now()
-    state.lastError = task.error || '顾问没有返回'
+    state.lastError = detail
+    if (kind === 'protocol') state.protocolFaults = (state.protocolFaults || 0) + 1
+    else state.bridgeFaults = (state.bridgeFaults || 0) + 1
+    state.faultStreak = (state.bridgeFaults || 0) + (state.protocolFaults || 0)
+    return state.faultStreak
+  }
+  const autoOffIfNeeded = async (streak, reason) => {
+    if (!(DEFAULTS.autoOffAfterFailures > 0) || streak < DEFAULTS.autoOffAfterFailures) return false
+    state.enabled = false
+    state.stateVersion += 1
+    state.autoOffReason = `连续 ${streak} 次顾问故障（桥接 ${state.bridgeFaults || 0} / 协议 ${state.protocolFaults || 0}）`
+    await log(
+      `host:auto-off session=${sessionId} reason=${reason} fault=${streak} bridge=${state.bridgeFaults || 0} protocol=${state.protocolFaults || 0}`,
+    )
+    return true
+  }
+
+  if (task.status !== 'succeeded') {
+    const streak = fault('bridge', task.error || '顾问没有返回')
     // 顾问不可达时按配置降级：默认先放行并记账，避免把用户一起锁住。
     if (unreachablePolicy() === 'degrade') state.degradedAt = Date.now()
-    await log(`advisor:unreachable session=${sessionId} error=${state.lastError} policy=${unreachablePolicy()}`)
+    await log(`advisor:unreachable session=${sessionId} error=${state.lastError} policy=${unreachablePolicy()} fault=${streak}`)
+    // 连续故障到阈值就把开关自动关掉：门禁是"顾问能评审才开"的东西，
+    // 顾问本身挂了还硬锁着，只会把人锁在门外（2026-11-19 的真实事故）。
+    // 注意：这不是"安全降级"——关掉 = 评审保护**退出**，写工具不再被拦；
+    // 胶囊会明确显示「保护已退出」，恢复必须由用户本人重新开启。
+    await autoOffIfNeeded(streak, 'bridge-fault')
+    return {
+      sessionId,
+      phase,
+      verdict: '',
+      reply: task.reply || '',
+      ok: false,
+      error: state.lastError,
+      autoOff: state.enabled === false && Boolean(state.autoOffReason),
+      version,
+      round: state.round,
+      noGoStreak: state.noGoStreak,
+      notePath: '',
+    }
   }
+
+  // 任务跑完了但没有可用的 VERDICT：算协议故障（回复格式变了 / 被截断 / 多个结论）。
+  if (!verdict) {
+    const streak = fault('protocol', `回复里没有可用的 VERDICT（未解析到）：${String(task.reply || '').slice(0, 120)}`)
+    await log(`advisor:protocol-fault session=${sessionId} fault=${streak} chars=${String(task.reply || '').length}`)
+    await autoOffIfNeeded(streak, 'protocol-fault')
+    return {
+      sessionId,
+      phase,
+      verdict: '',
+      reply: task.reply || '',
+      ok: false,
+      error: state.lastError,
+      autoOff: state.enabled === false && Boolean(state.autoOffReason),
+      version,
+      round: state.round,
+      noGoStreak: state.noGoStreak,
+      notePath: '',
+    }
+  }
+  // 拿到有效结论：故障计数清零。
+  state.bridgeFaults = 0
+  state.protocolFaults = 0
+  state.faultStreak = 0
+  state.autoOffReason = ''
 
   if (phase === 'plan' && verdict === 'GO') {
     state.plannedAt = version
@@ -954,6 +1027,37 @@ function gateDecision(state, name, currentVersion, now = Date.now(), { trusted =
   }
 }
 
+// 工具回执的统一渲染：失败时**必须**把原因和下一步写出来。
+// 旧版只印 verdict+reply，桥挂了就显示「（无结论）」，人和模型都不知道该修哪里
+// （2026-11-19 另一个会话卡死的直接原因）。
+function formatAdvisorResult(value) {
+  const head = value.verdict ? `VERDICT: ${value.verdict}` : '（无结论）'
+  const parts = [head]
+  if (value.reply) parts.push('', value.reply)
+  if (!value.ok) {
+    parts.push('', `失败原因：${value.error || '顾问没有返回'}`)
+    parts.push(`当前链路：桥接=${bridgeState()}；脚本状态见 /v1/status；开关=${value.autoOff ? '已自动关闭' : '仍开启'}`)
+    parts.push(
+      [
+        '按这个顺序排查（多数情况是模拟器/页面这一侧）：',
+        '① 雷电是否在跑：ldconsole list2 看状态，没跑就 ldconsole launch --index 0 --headless；',
+        '② Via 是否停在 chatgpt.com 且已登录（不是登录页/错误页）；',
+        '③ 端口转发：adb reverse tcp:18765 tcp:18765；',
+        '④ 对话是否已满：直接调 gpt_new_chat 开一个新对话再重试；',
+        '⑤ 仍然失败就先关掉顾问开关（点胶囊或长按 3 秒）继续干活，别停在这里。',
+      ].join('\n'),
+    )
+  }
+  if (value.autoOff) {
+    parts.push(
+      '',
+      '注意：连续故障已达阈值，**评审保护已退出**（写工具不再被拦截）。',
+      '恢复保护需要你本人点一下输入框左侧的胶囊重新开启，或重新 advisor_plan 拿一次 GO。',
+    )
+  }
+  return parts.join('\n')
+}
+
 export function apply(ctx, rawConfig = {}) {
   const config = { ...DEFAULTS, ...(rawConfig || {}) }
   Object.assign(DEFAULTS, config)
@@ -1026,7 +1130,7 @@ export function apply(ctx, rawConfig = {}) {
           },
           output: {
             schema: { type: 'object', additionalProperties: true },
-            render: (_args, value) => [{ type: 'text', text: `${value.verdict || '（无结论）'}\n\n${value.reply || ''}` }],
+            render: (_args, value) => [{ type: 'text', text: formatAdvisorResult(value) }],
           },
           async execute(args, exec) {
             return review(ctx, exec, 'plan', args.message)
@@ -1050,7 +1154,7 @@ export function apply(ctx, rawConfig = {}) {
           },
           output: {
             schema: { type: 'object', additionalProperties: true },
-            render: (_args, value) => [{ type: 'text', text: `${value.verdict || '（无结论）'}\n\n${value.reply || ''}` }],
+            render: (_args, value) => [{ type: 'text', text: formatAdvisorResult(value) }],
           },
           async execute(args, exec) {
             return review(ctx, exec, 'review', args.message)
@@ -1197,6 +1301,11 @@ export function apply(ctx, rawConfig = {}) {
               degraded: state.degradedAt > 0,
               deniedStreak: state.deniedStreak,
               lastError: state.lastError,
+              failureStreak: state.faultStreak,
+              bridgeFaults: state.bridgeFaults,
+              protocolFaults: state.protocolFaults,
+              autoOff: Boolean(state.autoOffReason),
+              autoOffReason: state.autoOffReason,
               stateVersion: state.stateVersion,
               generation: state.generation,
               // 红点 = 同一版本上连续 3 次 NO-GO（版本变了要重新累积）。
@@ -1424,6 +1533,7 @@ export const __test = {
   },
   toolSnapshotOf,
   enforceToolSnapshot,
+  formatAdvisorResult,
   bindHostContext,
   buildMessage,
   makeGrant,

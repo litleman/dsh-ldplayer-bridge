@@ -38,6 +38,9 @@ window.__ModuleLoader__.load({
 .advisor-chip[data-alert="1"] .advisor-dot{background:${C.alert};box-shadow:0 0 8px ${C.alert}}
 .advisor-chip[data-config="1"]{border-color:${C.alert};color:${C.alert};cursor:not-allowed}
 .advisor-chip[data-config="1"] .advisor-dot{background:${C.alert};opacity:1}
+/* 自动关闭：评审保护已退出——用告警色标出来，不能看着像"普通的关"。 */
+.advisor-chip[data-autooff="1"]{border-color:${C.alert};color:${C.alert}}
+.advisor-chip[data-autooff="1"] .advisor-dot{background:${C.alert};opacity:1;box-shadow:0 0 8px ${C.alert}}
 .advisor-chip .advisor-label{font-variant-numeric:tabular-nums}
 `
       document.head.appendChild(style)
@@ -95,6 +98,9 @@ window.__ModuleLoader__.load({
             workspaceState: String(next.workspaceState || ''),
             configError: String(next.configError || ''),
             bridgeState: String(next.bridgeState || ''),
+            // 自动关闭 = 评审保护已退出，必须显示出来（不能当成普通"关"）。
+            autoOff: Boolean(next.autoOff),
+            autoOffReason: String(next.autoOffReason || ''),
             loaded: true,
           })
           setStale(false)
@@ -265,8 +271,11 @@ window.__ModuleLoader__.load({
       const pending = !loaded || !workspaceState
       const misconfigured = !pending && workspaceState !== 'ready'
       const configHint = state.configError ? `（${state.configError}）` : ''
+      // 自动关闭 = 评审保护已退出（写工具不再被拦），必须显式标出来，
+      // 不能让人以为"开关自己关掉只是个小故障、保护还在"。
+      const autoOff = Boolean(state.autoOff) && !state.enabled
 
-      const label = state.enabled ? '顾问已开启' : '顾问开关'
+      const label = state.enabled ? '顾问已开启' : autoOff ? '评审保护已退出' : '顾问开关'
       return h(
         'button',
         {
@@ -275,6 +284,7 @@ window.__ModuleLoader__.load({
           'data-on': state.enabled ? '1' : '0',
           'data-alert': misconfigured ? 'config' : state.alert || state.noGoStreak >= 3 ? '1' : '0',
           'data-config': pending ? 'loading' : misconfigured ? '1' : '0',
+          'data-autooff': autoOff ? '1' : '0',
           'data-stale': stale ? '1' : '0',
           title: stale
             ? '顾问开关：状态同步失败，显示可能不是最新的'
@@ -282,9 +292,11 @@ window.__ModuleLoader__.load({
               ? '顾问开关：正在确认配置…（还没拿到服务端状态前，不会显示成可用）'
               : misconfigured
                 ? `顾问开关不可用：未配置 workspace${configHint}。请在 profile 的 cordis.patch.yml 里给 advisor-toggle 设置 workspace，或设置环境变量 DSH_WORKSPACE。`
-                : state.enabled
-                  ? '顾问已开启：方案与交付都会先交给 ChatGPT 评审，拿到 GO 才继续。长按 3 秒可应急解除（写审计日志）。'
-                  : '顾问开关：打开后，方案与交付先交给 ChatGPT 评审',
+                : autoOff
+                  ? `顾问已自动关闭：${state.autoOffReason || '连续故障'}。注意评审保护**已退出**，写工具不再被拦；要恢复保护请你自己点一下重新开启。`
+                  : state.enabled
+                    ? '顾问已开启：方案与交付都会先交给 ChatGPT 评审，拿到 GO 才继续。长按 3 秒可应急解除（写审计日志）。'
+                    : '顾问开关：打开后，方案与交付先交给 ChatGPT 评审',
           onClick: () => {
             // 长按刚结束时浏览器会补一个 click，这一次不当作开关切换。
             if (suppressClick.current) {

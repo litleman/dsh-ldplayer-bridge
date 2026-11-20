@@ -1,6 +1,6 @@
-# 顾问开关重启自检  2026-11-19T04:42:40.778Z
-base=http://127.0.0.1:56051
-session=verify-restart-mwn2dloq
+# 顾问开关重启自检  2026-11-19T10:57:13.352Z
+base=http://127.0.0.1:57664
+session=verify-restart-mwnfr9mw
 
 PASS  /state 可读且字段齐全  status=200 missing=-
 PASS  /hello 首次注册成功  status=200
