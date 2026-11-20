@@ -10,7 +10,7 @@ import { defineTool } from "@deepseek-ai/dsh-tools";
 import z from "@deepseek-ai/schemastery";
 import fs from "node:fs";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const name = "ldplayer-bridge";
@@ -250,10 +250,177 @@ async function installedScriptVersion(bridgeDir) {
   }
 }
 
+/**
+ * 保住「桥」这条链路：雷电（或整台机器）重启后，`adb reverse` 会没了、Via 也被杀，
+ * 页面脚本自然不心跳。这里做三件事，每轮都幂等：
+ *   1) 设备不在线就等（不自己拉起模拟器，避免抢用户的操作）；
+ *   2) reverse 缺 tcp:<port> 就补上；
+ *   3) 设备在线但确实没人心跳（>max(3×stale,300)s）→ 强制重启 Via 并打开 ChatGPT（5 分钟冷却）。
+ * 返回结构化结果，既给日志用，也可以被工具渲染。
+ */
+let lastViaRelaunch = 0;
+let lastServerSpawn = 0;
+
+/**
+ * 保证 Bridge 服务端（`node bin/dsh-bridge.js serve`）活着。
+ * 它是独立进程：机器重启、进程被误杀、或 adb/雷电一起重启后，它都可能不在，
+ * 这时页面脚本怎么心跳也没用（HTTP 直接 ECONNREFUSED）。
+ * 只在健康检查失败时拉起，成功拉起后等最多 10 秒再复检一次。
+ */
+async function ensureBridgeServer(bridgeDir, { waitMs = 10000 } = {}) {
+  const bridgeConfig = readBridgeConfig(bridgeDir);
+  const healthUrl = `${bareHost(bridgeConfig)}/v1/health`;
+  const probe = async () => {
+    try {
+      const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2000) });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+  if (await probe()) return { action: "server-ok", spawned: false };
+  if (Date.now() - lastServerSpawn < 15000) return { action: "server-spawn-cooling", spawned: false };
+
+  const entry = path.join(bridgeDir, "bin", "dsh-bridge.js");
+  if (!fs.existsSync(entry)) {
+    return { action: "server-missing", spawned: false, error: `找不到 ${entry}` };
+  }
+  const child = spawn(process.execPath, [entry, "serve"], {
+    cwd: bridgeDir,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
+  lastServerSpawn = Date.now();
+
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
+    await sleep(700);
+    if (await probe()) return { action: "server-restarted", spawned: true };
+  }
+  return { action: "server-unhealthy", spawned: true };
+}
+
+async function ensureBridgeLink(bridgeDir, options = {}) {
+  const { relaunchVia = true, staleSeconds = 90, force = false } = options;
+  const bridgeConfig = readBridgeConfig(bridgeDir);
+  const out = {
+    server: null,
+    device: null,
+    reverseAdded: false,
+    reversePresent: false,
+    relaunchedVia: false,
+    heartbeatAge: null,
+    action: "none",
+    error: null
+  };
+  // 服务端先活过来，后面 adb / 心跳检查才有意义。
+  out.server = (await ensureBridgeServer(bridgeDir)).action;
+  if (!bridgeConfig.adbPath || !fs.existsSync(bridgeConfig.adbPath)) {
+    out.error = "adbPath 未配置或文件不存在";
+    out.action = "no-adb";
+    return out;
+  }
+  const state = await adbRun(bridgeConfig, ["get-state"]);
+  out.device = state.ok ? state.stdout || "device" : "offline";
+  if (!state.ok || !String(state.stdout || "device").includes("device")) {
+    // 设备没起来就什么都不做：自动拉起模拟器会打断用户，改成让调用方决定。
+    out.action = "device-offline";
+    return out;
+  }
+
+  const list = await adbReverseList(bridgeConfig);
+  const mapped = list.ok && list.lines.some((line) => line.includes(`tcp:${bridgeConfig.port}`));
+  out.reversePresent = Boolean(mapped);
+  if (!mapped) {
+    const added = await adbRun(bridgeConfig, [
+      "reverse",
+      `tcp:${bridgeConfig.port}`,
+      `tcp:${bridgeConfig.port}`
+    ]);
+    out.reverseAdded = added.ok;
+    if (!added.ok) out.error = added.stderr || "adb reverse 失败";
+    out.action = added.ok ? "reverse-restored" : "reverse-failed";
+  }
+
+  let fresh = false;
+  try {
+    const client = await loadClient(bridgeDir, { timeoutMs: 6000 });
+    const status = await client.status();
+    const clients = Array.isArray(status?.clients) ? status.clients : [];
+    const ages = clients
+      .map((c) => ageSeconds(c.last_seen_at))
+      .filter((n) => Number.isFinite(n));
+    out.heartbeatAge = ages.length ? Math.min(...ages) : null;
+    fresh = ages.some((age) => age <= staleSeconds);
+  } catch (err) {
+    out.error = out.error || err.message;
+  }
+
+  if (!fresh && relaunchVia) {
+    // 只在「确实没人心跳」时才重启 Via：心跳新鲜说明页面活着（可能正在生成回复），
+    // 重启会把在飞的任务打断。再加 5 分钟冷却，避免重启风暴。
+    const lonely = out.heartbeatAge === null || out.heartbeatAge > Math.max(staleSeconds * 3, 300);
+    const cooled = Date.now() - lastViaRelaunch > 5 * 60 * 1000;
+    if (lonely && cooled) {
+      // 多半是重启后 Via 根本没跑起来，或者停在别的页面。
+      // force-stop 一下再开，能保证脚本重新注入（SPA 导航不会重跑脚本）。
+      const pkg = bridgeConfig.viaPackage || "mark.via";
+      await adbRun(bridgeConfig, ["shell", "am", "force-stop", pkg]);
+      await sleep(800);
+      await adbRun(bridgeConfig, [
+        "shell",
+        "am",
+        "start",
+        "-a",
+        "android.intent.action.VIEW",
+        "-d",
+        "https://chatgpt.com/",
+        "-p",
+        pkg
+      ]);
+      lastViaRelaunch = Date.now();
+      out.relaunchedVia = true;
+      out.action = out.action === "none" ? "via-restarted" : `${out.action}+via-restarted`;
+    }
+  } else if (fresh && out.action === "none") {
+    out.action = "ok";
+  }
+
+  if (force && out.action === "none") out.action = "ok";
+  return out;
+}
+
 function apply(ctx, config) {
   const bridgeDir = path.resolve(config.bridgeDir || DEFAULT_BRIDGE_DIR);
   const defaultTimeoutSeconds = config.defaultTimeoutSeconds ?? 180;
   const pollIntervalMs = config.pollIntervalMs ?? 500;
+
+  // 守护 adb reverse 与 Via 心跳：雷电（或整机）重启后 reverse 会丢、Via 会被杀，
+  // 不补这一步就得每次手工 adb reverse + 重开页面（2026-11-20 用户反馈）。
+  // watchdogSeconds=0 可关掉；relaunchVia=false 时只补 reverse、不动 Via。
+  const watchdogSeconds = config.watchdogSeconds ?? 30;
+  const runEnsure = () =>
+    ensureBridgeLink(bridgeDir, { relaunchVia: config.relaunchVia !== false })
+      .then((r) => {
+        if (r.action !== "ok" && r.action !== "none") {
+          console.log(
+            `[dsh-ldplayer-bridge] ensure: ${r.action} reverse=${r.reversePresent} heartbeat=${r.heartbeatAge ?? "?"}s ${r.error || ""}`
+          );
+        }
+        return r;
+      })
+      .catch((err) => {
+        console.log(`[dsh-ldplayer-bridge] ensure failed: ${err.message}`);
+        return { action: "error", error: err.message };
+      });
+  if (watchdogSeconds > 0) {
+    const timer = setInterval(runEnsure, watchdogSeconds * 1000);
+    if (typeof timer.unref === "function") timer.unref();
+    if (typeof ctx.effect === "function") ctx.effect(() => () => clearInterval(timer));
+    setTimeout(runEnsure, 3000);
+  }
 
   ctx.tools.register(
     defineTool({
