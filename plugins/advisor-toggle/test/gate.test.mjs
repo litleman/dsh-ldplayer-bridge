@@ -87,8 +87,29 @@ test('第一批授权过期 / 超额后失效，并说明原因', () => {
     degradedAt: 0,
   };
   const over = gateDecision(heavy, 'write', 'v1', Date.now(), { trusted: true });
-  assert.equal(over.allow, false, '用量到上限必须重新 plan');
-  assert.match(over.reason, /操作上限/);
+  assert.equal(over.allow, false, '用量到上限必须续期或重新 plan');
+  // v4 M2：额度用完但还能续 → 引导续期，而不是"再也干不了活"；累计额度与总期限不重置。
+  assert.equal(over.why, 'needs-renewal');
+  assert.match(over.reason, /需要续期/);
+  assert.match(over.reason, /累计用量：300\/600/);
+
+  // 续期次数用尽 → 直接作废，必须重新 plan 开新计划。
+  const exhausted = {
+    enabled: true,
+    activePlanId: 'plan-1',
+    toolSnapshotDigest: 'snap-1',
+    grant: {
+      id: 'b4', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1',
+      at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 300, used: 300,
+      renewalCount: 3, maxRenewals: 3, totalUsed: 300, totalOpsLimit: 600,
+      totalDeadline: Date.now() + 3600000, lastActivityAt: Date.now(),
+    },
+    degradedAt: 0,
+  };
+  const dead = gateDecision(exhausted, 'write', 'v1', Date.now(), { trusted: true });
+  assert.equal(dead.allow, false);
+  assert.equal(exhausted.grant, null, '续期用尽必须作废授权');
+  assert.match(dead.reason, /续期次数已用完/);
 });
 
 test('笔记目录里的写入不改版本指纹（否则插件自己会作废刚拿到的 GO）', async () => {

@@ -64,6 +64,15 @@ test('上下文管理工具：只放行 compress；decompress 能 toFile 写盘�
   assert.equal(isReadOnly('plugin_manager'), false);
 });
 
+test('顾问链路自愈工具放行，但会改外部状态的外发/安装工具仍被拒', () => {
+  // 顾问对话满了必须能开新对话，否则门禁自锁（2026-11-23 现场死锁）
+  assert.equal(isReadOnly('gpt_new_chat'), true);
+  assert.equal(isReadOnly('gpt_wait_reply'), true);
+  // 下面这两个会改变外部状态：任意外发 / 驱动 adb 点击
+  assert.equal(isReadOnly('gpt_send_message'), false);
+  assert.equal(isReadOnly('gpt_install_userscript'), false);
+});
+
 test('新会话状态带 stateVersion/generation/noGoVersion，红点不跨版本累计', () => {
   const state = stateOf(`test-${Date.now()}`);
   assert.equal(typeof state.stateVersion, 'number');

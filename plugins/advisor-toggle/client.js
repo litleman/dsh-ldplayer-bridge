@@ -38,9 +38,12 @@ window.__ModuleLoader__.load({
 .advisor-chip[data-alert="1"] .advisor-dot{background:${C.alert};box-shadow:0 0 8px ${C.alert}}
 .advisor-chip[data-config="1"]{border-color:${C.alert};color:${C.alert};cursor:not-allowed}
 .advisor-chip[data-config="1"] .advisor-dot{background:${C.alert};opacity:1}
-/* 自动关闭：评审保护已退出——用告警色标出来，不能看着像"普通的关"。 */
-.advisor-chip[data-autooff="1"]{border-color:${C.alert};color:${C.alert}}
+/* 自动关闭：评审保护已退出——用告警色标出来，不能看着像"普通的关"。 */.advisor-chip[data-autooff="1"]{border-color:${C.alert};color:${C.alert}}
 .advisor-chip[data-autooff="1"] .advisor-dot{background:${C.alert};opacity:1;box-shadow:0 0 8px ${C.alert}}
+/* 阶段（v4）：暂停=虚线框（不是"坏了"，是"等你去改方案重审"），收尾=点线框。 */
+.advisor-chip[data-phase="paused"]{border-style:dashed}
+.advisor-chip[data-phase="paused"] .advisor-dot{opacity:.45}
+.advisor-chip[data-phase="delivering"]{border-style:dotted}
 .advisor-chip .advisor-label{font-variant-numeric:tabular-nums}
 `
       document.head.appendChild(style)
@@ -274,8 +277,21 @@ window.__ModuleLoader__.load({
       // 自动关闭 = 评审保护已退出（写工具不再被拦），必须显式标出来，
       // 不能让人以为"开关自己关掉只是个小故障、保护还在"。
       const autoOff = Boolean(state.autoOff) && !state.enabled
+      // 阶段（顾问 v4 M1）：开关是"要不要评审"，阶段是"当前走到哪一步"，
+      // 许可（permit/finalize）是"现在能写什么"。三者拆开后，胶囊要把阶段也说出来，
+      // 否则"开着但暂停"看起来和"开着在干活"完全一样，人不知道要改方案重审。
+      const phase = String(state.phase || '')
+      const phaseHint = state.enabled
+        ? phase === 'paused'
+          ? '（待修订：按评审意见改完方案后重新 advisor_plan）'
+          : phase === 'delivering'
+            ? '（待收尾：只剩提交与文档可写）'
+            : phase === 'executing'
+              ? '（执行中）'
+              : ''
+        : ''
 
-      const label = state.enabled ? '顾问已开启' : autoOff ? '评审保护已退出' : '顾问开关'
+      const label = state.enabled ? `顾问已开启${phaseHint}` : autoOff ? '评审保护已退出' : '顾问开关'
       return h(
         'button',
         {
@@ -285,6 +301,7 @@ window.__ModuleLoader__.load({
           'data-alert': misconfigured ? 'config' : state.alert || state.noGoStreak >= 3 ? '1' : '0',
           'data-config': pending ? 'loading' : misconfigured ? '1' : '0',
           'data-autooff': autoOff ? '1' : '0',
+          'data-phase': phase || 'idle',
           'data-stale': stale ? '1' : '0',
           title: stale
             ? '顾问开关：状态同步失败，显示可能不是最新的'
@@ -295,7 +312,7 @@ window.__ModuleLoader__.load({
                 : autoOff
                   ? `顾问已自动关闭：${state.autoOffReason || '连续故障'}。注意评审保护**已退出**，写工具不再被拦；要恢复保护请你自己点一下重新开启。`
                   : state.enabled
-                    ? '顾问已开启：方案与交付都会先交给 ChatGPT 评审，拿到 GO 才继续。长按 3 秒可应急解除（写审计日志）。'
+                    ? `顾问已开启${phaseHint}：方案与交付都会先交给 ChatGPT 评审，拿到 GO 才继续。长按 3 秒可应急解除（写审计日志）。`
                     : '顾问开关：打开后，方案与交付先交给 ChatGPT 评审',
           onClick: () => {
             // 长按刚结束时浏览器会补一个 click，这一次不当作开关切换。

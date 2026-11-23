@@ -82,20 +82,36 @@
 4. 对话是不是满了：直接调 `gpt_new_chat` 开新对话再重试。
 5. 仍失败：先关掉开关继续别的活，别停在这里（开关会自动退出保护，也可以手动点胶囊）。
 
-用户脚本版本可以这样看：`GET /v1/status` 里 `clients[].script_version` 必须是当前版本（当前 **0.3.1**）。Via 里更新脚本的按钮坐标（1920×1080）是菜单 `(1851,80)` → 设置 `(1856,366)` → 脚本 `(600,729)` → 更新 `(1871,90)` → 确定 `(1165,665)`；写成 `699` 会点空、脚本停在旧版本（已踩过）。
+用户脚本版本可以这样看：`GET /v1/status` 里 `clients[].script_version` 必须是当前版本（当前 **0.3.4**）。Via 里更新脚本的按钮坐标（1920×1080）是菜单 `(1851,80)` → 设置 `(1856,366)` → 脚本 `(600,729)` → 更新 `(1871,90)` → 确定 `(1165,665)`；写成 `699` 会点空、脚本停在旧版本（已踩过）。
 
 ## 落盘
 
 - 评审原文：`<workspace>\gpt-notes\<会话>/<时间>-<plan|review>.md`（每次保留 5 份，超出删最老）。
 - 事件日志：`%DSH_HOME%\logs\advisor-toggle.log`（**不在工作区**，否则写日志就等于改版本）。
 
+## 阶段与许可（v0.4：三态 + 收尾许可 + 写入日志）
+
+顾问（2026-11-23）指出 v0.3 把三件事混在一个 `grant` 里，导致两个后果：NO-GO 之后自动"换张票继续"等于否决失效；续期可以无限刷。v0.4 拆成三层：
+
+| 层 | 字段 | 含义 |
+| --- | --- | --- |
+| 要不要评审 | `enabled` | 用户开关，跟会话走 |
+| 走到哪一步 | `phase` | `idle` → `planning` → `executing` →（review GO）`delivering`；HOLD/NO-GO → `paused` |
+| 现在能写什么 | `grant`（执行许可）/ `finalizePermit`（收尾许可） | 执行许可按批次签发；收尾许可只允许提交与文档，用完即焚 |
+
+- **`paused` 不是"被否决"**：它表示本批执行暂停、需要按意见改完方案后重新 `advisor_plan`。拒绝文案里明确写了这句话，并禁止"重试同一个调用"。
+- **续期不重置累计额度**：`advisor_renew` 只在闲置超时/额度用完、且 `renewalCount < maxRenewals`（默认 3）、`totalUsed < totalOpsPerPlan`（默认 600）、未过 `totalDeadline`（默认 4 小时）时可用；续期只顺延时间与当前窗口额度。
+- **收尾许可**：review GO 之后签发，只放行 `git status|diff|log|add|commit` 与 `docs/`、`gpt-notes/`、`README/CHANGELOG/AGENTS.md` 的写入，默认 5 次 / 10 分钟，用完即焚。
+- **写入日志（journal）**：每个被放行的写操作记 `planId / 工具 / 目标路径 / 前后版本`，`/state.journal` 可查；`journalAudit()` 会指出"不属于当前计划"的条目——它不阻断，但让计划外改动变成可发现的事实。
+
 ## 已实现 / 未实现
 
 已实现：
 
 - 开关（按会话保存）+ 三态显示 + 每 5 秒刷新 + 长按 3 秒应急解除。
-- `advisor_plan` / `advisor_review`，走真实 Bridge，`VERDICT` 只认开头。
+- `advisor_plan` / `advisor_review` / `advisor_renew`，走真实 Bridge，`VERDICT` 只认开头。
 - `tools/pre-execute` 门禁、执行批次语义、失效/降级/自锁三条兜底路径。
+- 三态阶段（executing / paused / delivering）、收尾许可、累计额度与续期上限、写入日志。
 - `agent/pre-step` 交付提醒（版本变了就催 `advisor_review`）。
 - 版本指纹排除副作用路径；每会话评审串行化；笔记路径穿越校验。
 
@@ -103,6 +119,7 @@
 
 - **自动 new-chat 阈值**：`round >= 8` / `chars >= 50000` 仍只在 `review()` 内判断，没有独立定时检查；页面自报 `limit` 靠用户脚本新开对话。
 - 交付提醒是注入消息，不是硬拦截（没有可拦截的「交付」工具事件）。
+- 收尾许可只按"命令/路径白名单"判定，不区分"这次提交是否对应本次计划"（那要靠 journal 人工核对）。
 
 ## 漏洞清单（三轮对抗评审的处置）
 
@@ -184,7 +201,7 @@ plugin_manager set_bundle target=advisor-toggle enabled=true
 
 ```powershell
 cd <插件目录>
-node --test test/*.mjs        # 纯函数、门禁、指纹排除、客户端契约、审计工具、P0、脱敏注入，64 条
+node --test test/*.mjs        # 纯函数、门禁、三态阶段/收尾许可、写入日志、指纹排除、客户端契约、审计工具、P0、脱敏注入，124 条
 node scripts/verify-restart.mjs --base http://127.0.0.1:56051   # 重启后端点自检，写 docs/anomaly-report.txt
 ```
 
