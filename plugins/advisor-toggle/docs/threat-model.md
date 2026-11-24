@@ -97,3 +97,38 @@
 - **P0-2 演练开关的环境隔离**：`devExtraTool` / `devDisableFinalizeTool` 原来只靠默认 `false` 保证生产安全，而 profile 的 config 可以把它写开——"默认关"不等于"生产不能开"。现在两个开关都必须满足 `DSH_ADVISOR_DEV=1`（见 `devFlags()`）才生效；`apply()` 里复位与注册逻辑共用同一判定，配置写成 `true` 但在生产环境不会注册假工具、也不会摘掉收尾工具。测试 `test/isolation.test.mjs` 覆盖四态：env 未设→配置开也 false；env=1 且配置开→true；env=1 但配置没开→false；`allowed` 必须包含只读工具。
 
 **残余风险**：`DSH_ADVISOR_DEV=1` 是进程级环境变量，任何能改环境的人都能打开演练开关——但它只能改"注册出来的工具集合"，而 `/isolation` 会把这种改变如实报出来（`total` 变化、假工具出现在 `deniedSample`），因此它是一次可发现的篡改，不是静默绕过。
+
+> 第 8、9 节是历史记录。第 8 节描述的 `advisor_finalize_note` 与路径校验在 v11 已整体删除（见第 10 节），保留原文只为说明"为什么最后选择不做"。
+
+## 10. v11：取消插件写能力 + journal 与漂移放行的边界（2026-11-24）
+
+### 10.1 为什么删掉收尾写能力
+
+顾问要求"写文件必须绑定已验证的目录句柄（openat / NtCreateFile(RootDirectory) / O_NOFOLLOW 级别）"。Windows 上的 Node.js 只有路径式 `fs.open()`：`realpath(parent)` 校验与 `open(path,'wx')` 之间，父目录可以被换成指向外部的 junction，文件就落到授权根之外。**纯 JS 消除不了这个窗口**，加句柄、加 realpath 次数、缩短窗口都不构成证明。因此按用户裁决直接**取消插件的写能力**：删掉 `advisor_finalize_note` 工具与 `finalizeCreate/trustedRoots/relUnderRoot/finalizeDecision/finalizeTarget`、`FINALIZE_*`、`finalizePermit`；收尾阶段（review GO 之后）是**纯只读**，只记 `advisor:delivering … mode=read-only`，提交请关掉开关后自己做。
+
+### 10.2 journal 是事后检测，不是事前阻止
+
+`journalAppend()` 每次放行写工具都记 `{operationId, planId, toolName, targetPaths, versionBefore, versionAfter}`，`journalAudit()` 会算 `unexplained`（有写入却没有对应 journal 的路径链）。必须明确三条边界：
+
+1. **journal 不能阻止写入**，它只在事后回答"哪些路径被改了、有没有解释"。
+2. **journal 不一定完整**：写入成功后、journal 落盘前进程崩溃，或存在不经过 journal 的写入口（例如被替换的同名工具实现），都会让记录缺失。**缺记录 ≠ 合法操作**：`journalAudit()` 的 `unexplained` 非空时必须按"可疑"处理，不能默认放过。
+3. **不能拿 journal 当写入安全约束**：真正的约束只有"授权范围 + 工具快照"；journal 是取证材料。
+
+### 10.3 版本漂移放行不是内容完整性保证
+
+`granted-drift`（内容摘要变了但 planId 与工具快照未变 → 放行）解决的是"同一批活执行中必然改文件"的问题，**它不保证改的是计划内的文件**。外部进程的修改、或我自己的越界修改，在文件系统层没有归因信息，事前无法区分。因此：
+
+- 漂移放行的前提只有三条：`trusted`（摘要真算出来，不是 `untrusted-`）、`planId` 一致、工具快照一致。
+- **不是**"内容没被篡改"的证明，也**不是**"授权范围被遵守"的证明。
+- 要真正收紧，应当让 permit 携带 `allowedPaths[]` 并只放行这些路径——那是新语义，不在 v11 范围内，列为待做项。
+- `untrusted-`（git 不可用 / 摘要算不出）一律拒绝，不参与"漂移放行"。
+
+### 10.4 与 v11 代码的对应
+
+| 结论 | 代码/测试 |
+|------|-----------|
+| 插件无自我写通道 | `test/no-write-surface.test.mjs`（禁 `advisor_finalize_note`/`finalizeCreate`/`trustedRoots`/`relUnderRoot`/`FINALIZE_*`/`await unlink(`/`open(...,'wx')`；`await rm(` 最多 1 处且绑 `notesDir`） |
+| 收尾只读 | `reviewLocked()` 的 delivering 分支 + `test/permit.test.mjs`「delivering 零写」 |
+| 纯判定 / 无副作用审计 | `evaluateDecision()`、`auditIsolation()` + `test/isolation-detail.test.mjs`（源码断言不含 `gateDecision(`/`used++`/`state.phase =`） |
+| 旧计划不能借漂移续命 | `planMismatch` 判定 + `test/p0.test.mjs`「不属于当前计划」 |
+| 工具快照变化不算漂移 | `snapshotMismatch` 判定 + `test/p0.test.mjs`「工具集变化拒绝」 |

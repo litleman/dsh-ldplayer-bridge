@@ -101,9 +101,10 @@
 
 - **`paused` 不是"被否决"**：它表示本批执行暂停、需要按意见改完方案后重新 `advisor_plan`。拒绝文案里明确写了这句话，并禁止"重试同一个调用"。
 - **续期不重置累计额度**：`advisor_renew` 只在闲置超时/额度用完、且 `renewalCount < maxRenewals`（默认 3）、`totalUsed < totalOpsPerPlan`（默认 600）、未过 `totalDeadline`（默认 4 小时）时可用；续期只顺延时间与当前窗口额度。
-- **收尾许可（v10，插件零 Git）**：review GO 之后签发，只放行一个工具 `advisor_finalize_note({ path, content })`，且路径必须落在 `docs/` 或 `gpt-notes/` 之下、只允许新建（`wx`，已存在就拒），默认 3 次 / 10 分钟，用完即焚。**插件不再执行任何 git 命令**——`git add` / `git commit` 请在关掉开关后自己执行；收尾阶段调 `pwsh` 会被拒，理由里写明了这一点。
-- **收尾写入的路径校验**：`trustedRoots()` 先 `lstat`（符号链接 / 不是目录 / 不存在都拒），`realpath` 后只校验「名字对得上」+「两个根同一父目录」，写入时再核父目录 realpath 落在授权根内，写完复核一次，父目录被换掉就删掉刚写的文件并报错。这样能挡住 junction 把 `docs` 指到别处，也不会被 Windows 8.3 短路径（`ADMINI~1`）误判。
-- **写入日志（journal）**：每个被放行的写操作记 `planId / 工具 / 目标路径 / 前后版本`，`/state.journal` 可查；`journalAudit()` 会指出"不属于当前计划"的条目——它不阻断，但让计划外改动变成可发现的事实。
+- **收尾阶段是纯只读（v11）**：review GO 之后只把 `phase` 设为 `delivering` 并记 `advisor:delivering … mode=read-only`，**不再签发任何写许可**。`advisor_finalize_note` 与 `finalizeCreate/trustedRoots/relUnderRoot` 已整体删除——原因是 Windows 上的 Node 只有路径式 `fs.open()`，「父目录已被验证」与「创建文件」之间存在无法消除的 TOCTOU（父目录可能被换成指向外部的 junction）。提交与写文档请在关掉开关后自己完成。
+- **插件不再写工作区文件**：现在只有 4 处固定路径写入（日志、评审笔记、审计报告），清单见 `docs/write-surface.md`；`test/no-write-surface.test.mjs` 会拦"写面回潮"。
+- **写入日志（journal）是事后检测，不是事前阻止**：每个被放行的写操作记 `planId / 工具 / 目标路径 / 前后版本`，`/state.journal` 可查；`journalAudit()` 会指出没有对应记录的路径链。**缺记录不等于合法**——写入成功但 journal 落盘前崩溃、或存在不经过 journal 的写入口时，记录会缺失，必须按可疑处理。它让计划外改动"可发现"，但不构成"没有越权写"的证明。
+- **版本漂移放行 ≠ 内容完整性保证**：`granted-drift` 只表示「内容摘要变了，但 planId 与工具快照没变」，解决的是"同一批活执行中必然改文件"。它不保证改的都在计划范围内，也无法区分"我改的"和"别人改的"。要真正收紧需要让 permit 携带 `allowedPaths[]`，那是待做项；`untrusted-`（git 不可用）一律拒绝。
 
 ### 唯一授权审计（`GET /api/advisor-toggle/isolation`）
 

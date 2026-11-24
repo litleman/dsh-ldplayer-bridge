@@ -879,7 +879,7 @@ async function toolNames(scopeName) {
 }
 
 // 审计：对给定“状态”逐工具判定（纯函数），返回该状态下的写权限画像。
-async function auditIsolation(stateName = 'executing', scopeName = 'root') {
+async function auditIsolation(stateName = 'executing', scopeName = 'root', detail = false) {
   // 未知 scope 必须显式报错，绝不回退到另一个 scope（否则审计报告会冒充分区结果）。
   if (scopeName !== 'root' && scopeName !== 'session') throw new Error(`unknown-scope:${scopeName}`)
   const kind = AUDIT_STATES.includes(stateName) ? stateName : 'executing'
@@ -901,7 +901,12 @@ async function auditIsolation(stateName = 'executing', scopeName = 'root') {
     ok: false,
     note,
   }
-  if (names.length === 0) return base
+  if (names.length === 0) {
+    // 取不到工具表时也要如实回答"什么都没有"，detail 版本给空清单而不是缺字段，
+    // 免得调用方把"字段缺失"误读成"没有允许项"。
+    if (!detail) return base
+    return { ...base, allowedNames: [], readOnlyNames: [] }
+  }
   const now = Date.now()
   const probe = probeState(kind, now)
   const allowed = []
@@ -922,7 +927,7 @@ async function auditIsolation(stateName = 'executing', scopeName = 'root') {
   const writableAllowCount = hostWritableAllowed.length
   const expectWritable = kind === 'executing'
   const ok = selfWriteTools.length === 0 && (expectWritable ? writableAllowCount > 0 : writableAllowCount === 0)
-  return {
+  const result = {
     ...base,
     complete: true,
     total: names.length,
@@ -935,6 +940,13 @@ async function auditIsolation(stateName = 'executing', scopeName = 'root') {
     writableAllowCount,
     ok,
   }
+  // 只在调用方明确要 detail 时追加清单。这里**复用**上面已经算出来的 allowed/names，
+  // 不重跑一次判定、不碰任何真实状态（probe 是本次调用里临时造的）。
+  if (detail) {
+    result.allowedNames = allowed
+    result.readOnlyNames = names.filter((name) => isReadOnly(name))
+  }
+  return result
 }
 
 // /state 的写面画像：按当前真实状态算一遍（live），不落盘、不消费。
@@ -1858,7 +1870,10 @@ export function apply(ctx, rawConfig = {}) {
               return send(400, { error: 'unknown-scope', scope: scopeName, allowed: ['root', 'session'] })
             }
             const stateName = String(q.get('state') || 'executing')
-            return send(200, await auditIsolation(stateName, scopeName))
+            // ?detail=1 才追加 allowedNames/readOnlyNames。它只是把已经算出来的结果列出来，
+            // 复用同一次判定的产物，不重跑判定、不消费额度、不改 phase/paused。
+            const detail = q.get('detail') === '1'
+            return send(200, await auditIsolation(stateName, scopeName, detail))
           }
           // 浏览器半注册：重启后第一个 /hello 生效（first-writer-wins），
           // 之后带别的 nonce 的页面要么是旧标签页、要么是伪造，一律 409。
