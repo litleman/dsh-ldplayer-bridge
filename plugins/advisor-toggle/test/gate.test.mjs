@@ -56,6 +56,8 @@ test('门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级窗�
     renewalCount: 0,
     maxRenewals: 3,
     idleTimeout: 1800000,
+    allowShell: true,
+    allowedPaths: [],
     lastActivityAt: Date.now(),
   });
   const base = { enabled: true, phase: 'executing', activePlanId: 'plan-1', toolSnapshotDigest: 'snap-1', version: 'v1' };
@@ -99,6 +101,8 @@ test('第一批授权过期 / 额度耗尽 / 续期用尽都会拒绝并作废�
       renewalCount: 0,
       maxRenewals: 3,
       idleTimeout: 1800000,
+      allowShell: true,
+      allowedPaths: [],
       lastActivityAt: Date.now(),
       ...grantPatch,
     },

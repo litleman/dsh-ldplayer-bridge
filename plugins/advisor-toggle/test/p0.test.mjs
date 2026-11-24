@@ -40,7 +40,7 @@ test('上一个计划的授权不能放行这一批活', () => {
     activePlanId: 'plan-B',
     planDigest: 'pd',
     toolSnapshotDigest: 'snap-1',
-    grant: { id: 'b1', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now() },
+    grant: { id: 'b1', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now() , allowShell: true, allowedPaths: [] }
   };
   const d = gateDecision(state, 'pwsh', 'v1', Date.now(), { trusted: true });
   assert.equal(d.allow, false);
@@ -55,7 +55,7 @@ test('工具集变过（重载/新装工具）后旧授权失效', () => {
     phase: 'executing',
     activePlanId: 'plan-A',
     toolSnapshotDigest: 'snap-2',
-    grant: { id: 'b1', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now() },
+    grant: { id: 'b1', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now() , allowShell: true, allowedPaths: [] }
   };
   const d = gateDecision(state, 'write', 'v1', Date.now(), { trusted: true });
   assert.equal(d.allow, false);
@@ -69,9 +69,9 @@ test('同一计划内版本漂移放行但标记 granted-drift（残余 TOCTOU �
     phase: 'executing',
     activePlanId: 'plan-A',
     toolSnapshotDigest: 'snap-1',
-    grant: { id: 'b1', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now() },
+    grant: { id: 'b1', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now() , allowShell: true, allowedPaths: [] }
   };
-  const d = gateDecision(state, 'write', 'v2', Date.now(), { trusted: true });
+  const d = gateDecision(state, 'pwsh', 'v2', Date.now(), { trusted: true });
   assert.equal(d.allow, true);
   assert.equal(d.why, 'granted-drift');
   assert.equal(d.grantVersion, 'v1');
@@ -113,8 +113,8 @@ test('插件重载（apply）会清空所有会话状态，旧授权不可能跨
 
 test('授权绑定字段缺失一律 fail-closed（HIGH-1 / HIGH-2）', () => {
   const base = () => ({ enabled: true, phase: 'executing', grant: null, activePlanId: 'plan-A', toolSnapshotDigest: 'snap', degradedAt: 0, deniedStreak: 0, lastFailureAt: 0 })
-  const grantWith = (patch) => ({ id: 'g', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now(), round: 1, ...patch })
-  const run = (statePatch, grantPatch) => { const s = { ...base(), ...statePatch }; s.grant = grantWith(grantPatch); return gateDecision(s, 'write', 'v1', Date.now(), { trusted: true }).allow }
+  const grantWith = (patch) => ({ id: 'g', planId: 'plan-A', version: 'v1', digest: 'd'.repeat(64), toolSnapshotDigest: 'snap', at: Date.now(), expiresAt: Date.now() + 60000, totalDeadline: Date.now() + 3600000, maxOps: 10, used: 0, totalOpsLimit: 600, totalUsed: 0, renewalCount: 0, maxRenewals: 3, idleTimeout: 1800000, lastActivityAt: Date.now(), allowShell: true, allowedPaths: [], round: 1, ...patch })
+  const run = (statePatch, grantPatch) => { const s = { ...base(), ...statePatch }; s.grant = grantWith(grantPatch); return gateDecision(s, 'pwsh', 'v1', Date.now(), { trusted: true }).allow }
 
   assert.equal(run({}, {}), true, '完整字段应放行')
   assert.equal(run({}, { expiresAt: 0 }), false, '缺 expiresAt 必须拒绝（不能永不过期）')

@@ -10,9 +10,9 @@
 
 import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readFile, readdir, rm, writeFile, appendFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile, appendFile, realpath } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -214,6 +214,10 @@ function stateOf(sessionId) {
       toolSnapshotDigest: '',
       // 快照是否真的读到了工具表（HIGH-3）：false 时不许签发写授权。
       toolSnapshotTrusted: false,
+      // 计划里声明的东西（模型 A）：本批允许写的路径前缀 + 是否允许跑命令。
+      // 两者都在 advisor_plan 调用时被覆盖，plan GO 时写进 permit。
+      planPaths: [],
+      planShell: false,
       updatedAt: Date.now(),
     })
   }
@@ -815,6 +819,109 @@ function scopeOfExec(exec) {
 const SELF_TOOLS = new Set(['advisor_plan', 'advisor_review', 'advisor_renew', 'advisor_finalize_note'])
 const AUDIT_STATES = ['idle', 'planning', 'executing', 'executing-invalid', 'delivering', 'paused']
 
+// —— 路径级授权（模型 A，2026-11-24）——
+// 三类能写盘的工具有明确的目标路径参数，可以做**硬约束**；其余能间接写盘的宿主工具
+// （shell / 桌面自动化 / 解压等）只能"声明放行 + 事后审计"。这个区别必须体现在代码与文档里，
+// 不许把 allowShell 说成"路径沙箱"。
+const PATH_BOUNDED_TOOLS = new Set(['edit', 'write', 'apply_patch', 'multi_edit'])
+const PATH_OPTION_TOOLS = new Map([['decompress', ['toFile', 'to_file', 'path', 'file']]])
+// 这些工具可能写任意路径：必须有 allowShell 才放行（声明，不是约束）。
+const DECLARED_WRITE_TOOLS = new Set([
+  'pwsh', 'bash', 'sh', 'shell', 'create_worktree', 'load_workspace_dependencies',
+  'gpt_send_message', 'gpt_install_userscript', 'gpt_new_chat', 'team', 'plugin_manager',
+])
+const DECLARED_WRITE_PREFIXES = ['cua_driver_native__', 'windows_', 'skillopt_', 'dsh_im_', 'mcp__']
+
+function isDeclaredWriteTool(name) {
+  return DECLARED_WRITE_TOOLS.has(name) || DECLARED_WRITE_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
+
+// 符号链接 / junction 兜底：词法上"看起来在允许目录里"，实际可能指向别处。
+// 取"最近一个已存在的祖先"的 realpath 再判一次；目标本身不存在也要能判（父目录存在即可）。
+// 注意：这仍然是"检查时"的事实，检查与写入之间还有窗口——威胁模型里如实写了，不称沙箱。
+async function realpathEscape(target, allowed) {
+  try {
+    // 先把 allowedPaths 也各自 realpath 一遍：Windows 的 8.3 短路径（ADMINI~1 vs Administrator）
+    // 会让"长路径 vs 真实短路径"的字面比较误判（实测踩过）。
+    const canonical = []
+    for (const root of allowed) {
+      try {
+        const real = await realpath(root)
+        canonical.push(process.platform === 'win32' ? real.toLowerCase() : real)
+      } catch {
+        canonical.push(root)
+      }
+    }
+    let probe = resolve(workspacePath() || process.cwd(), String(target))
+    for (let i = 0; i < 40; i += 1) {
+      try {
+        const real = await realpath(probe)
+        const flat = process.platform === 'win32' ? real.toLowerCase() : real
+        if (!canonical.some((root) => flat === root || flat.startsWith(root.endsWith(sep) ? root : root + sep))) {
+          return true
+        }
+        return false
+      } catch (error) {
+        if (error && error.code === 'ENOENT') {
+          const parent = dirname(probe)
+          if (parent === probe) return false
+          probe = parent
+          continue
+        }
+        return true
+      }
+    }
+    return true
+  } catch {
+    return true
+  }
+}
+
+
+
+// 把计划里声明的路径规范化成绝对路径（Windows 小写，避免大小写绕过）。
+function normalizeAllowedPaths(list) {
+  const out = []
+  for (const raw of Array.isArray(list) ? list : []) {
+    const text = String(raw || '').trim()
+    if (!text) continue
+    try {
+      const abs = resolve(workspacePath() || process.cwd(), text)
+      out.push(process.platform === 'win32' ? abs.toLowerCase() : abs)
+    } catch {
+      /* 非法路径直接丢弃，等于没声明 */
+    }
+  }
+  return [...new Set(out)]
+}
+
+// 从工具参数里取"这次要写哪个文件"。取不到就返回空数组（由调用方决定是拒还是记录）。
+function pathTargets(params) {
+  const keys = ['path', 'file_path', 'filePath', 'target', 'toFile', 'to_file', 'paths', 'files']
+  const found = []
+  const walk = (value) => {
+    if (typeof value === 'string') found.push(value)
+    else if (Array.isArray(value)) value.forEach(walk)
+  }
+  if (params && typeof params === 'object') {
+    for (const key of keys) if (key in params) walk(params[key])
+  }
+  return found.filter(Boolean)
+}
+
+// 词法层面的包含判定（纯函数，同步）。符号链接/junction 由 realpathGuard 再兜一层。
+function targetInside(target, allowed) {
+  let abs
+  try {
+    abs = resolve(workspacePath() || process.cwd(), String(target))
+  } catch {
+    return false
+  }
+  const flat = process.platform === 'win32' ? abs.toLowerCase() : abs
+  // 逐段比较，避免 "plugins-evil" 命中 "plugins" 前缀这种兄弟目录绕过。
+  return allowed.some((root) => flat === root || flat.startsWith(root.endsWith(sep) ? root : root + sep))
+}
+
 function probeState(kind, now = Date.now()) {
   const grant = {
     id: 'isolation-probe',
@@ -833,6 +940,10 @@ function probeState(kind, now = Date.now()) {
     idleTimeout: 10 * 60 * 1000,
     lastActivityAt: now,
     at: now,
+    // 模型 A 的探针也必须带上路径声明与 shell 声明，否则路径类工具会被判成
+    // path-not-allowed、shell 类会被判成 shell-not-declared，六态审计的 ok 就假了。
+    allowedPaths: normalizeAllowedPaths(['docs', 'gpt-notes']),
+    allowShell: true,
   }
   const base = {
     enabled: true,
@@ -905,16 +1016,23 @@ async function auditIsolation(stateName = 'executing', scopeName = 'root', detai
     // 取不到工具表时也要如实回答"什么都没有"，detail 版本给空清单而不是缺字段，
     // 免得调用方把"字段缺失"误读成"没有允许项"。
     if (!detail) return base
-    return { ...base, allowedNames: [], readOnlyNames: [] }
+    return { ...base, allowedNames: [], readOnlyNames: [], pathBoundedTools: [], declaredWriteTools: [] }
   }
   const now = Date.now()
   const probe = probeState(kind, now)
+  // 给路径类工具一个"落在允许目录里"的探针参数：审计要回答的是"这类工具受不受约束"，
+  // 不是"某个具体路径合不合法"（后者由真实的 pre-execute 判定）。
+  const probeParams = {
+    path: join(workspacePath() || process.cwd(), 'docs', 'isolation-probe.md'),
+    file_path: join(workspacePath() || process.cwd(), 'docs', 'isolation-probe.md'),
+    command: 'git status',
+  }
   const allowed = []
   const denied = []
   for (const name of names) {
     let decision
     try {
-      decision = evaluateDecision(probe, name, 'isolation', now, { trusted: true })
+      decision = evaluateDecision(probe, name, 'isolation', now, { trusted: true, params: probeParams })
     } catch (error) {
       decision = { allow: false, reason: `threw:${String(error && error.message)}` }
     }
@@ -945,18 +1063,22 @@ async function auditIsolation(stateName = 'executing', scopeName = 'root', detai
   if (detail) {
     result.allowedNames = allowed
     result.readOnlyNames = names.filter((name) => isReadOnly(name))
+    // 模型 A 的两类工具必须分开列：受路径硬约束的 vs 只靠 allowShell 声明的。
+    result.pathBoundedTools = names.filter((name) => PATH_BOUNDED_TOOLS.has(name) || PATH_OPTION_TOOLS.has(name))
+    result.declaredWriteTools = names.filter((name) => isDeclaredWriteTool(name) && !isReadOnly(name))
   }
   return result
 }
 
 // /state 的写面画像：按当前真实状态算一遍（live），不落盘、不消费。
-async function writeSurface() {
+async function writeSurface(stateName = 'executing') {
   const names = (await toolNames('root')).names
-  const probe = { enabled: true, paused: false, phase: 'executing', activePlanId: 'x', toolSnapshotDigest: 'x', grant: null, stateVersion: 0, generation: 0 }
   const now = Date.now()
+  const probe = probeState(stateName, now)
+  const probeParams = { path: join(workspacePath() || process.cwd(), 'docs', 'isolation-probe.md'), command: 'git status' }
   const allowed = []
   for (const name of names) {
-    if (evaluateDecision(probe, name, 'x', now, { trusted: false }).allow) allowed.push(name)
+    if (evaluateDecision(probe, name, 'x', now, { trusted: true, params: probeParams }).allow) allowed.push(name)
   }
   const allowedWritable = allowed.filter((name) => !isReadOnly(name))
   const selfWriteTools = allowedWritable.filter((name) => SELF_TOOLS.has(name))
@@ -1024,6 +1146,11 @@ function makeGrant({ state, version, planId, round }) {
     totalDeadline: at + Number(DEFAULTS.totalWindowMs || 4 * 60 * 60 * 1000),
     idleTimeout: ttl,
     lastActivityAt: at,
+    // —— 路径级授权（模型 A）——
+    // allowedPaths：edit/write/apply_patch 与 decompress 的目标路径硬约束（空 = 一律拒）。
+    // allowShell：命令类工具的执行许可。**它不约束写入范围**，只是"我声明允许跑命令"。
+    allowedPaths: Array.isArray(state.planPaths) ? [...state.planPaths] : [],
+    allowShell: Boolean(state.planShell),
   }
 }
 
@@ -1326,6 +1453,8 @@ const DENY_TEXT = {
   'grant-expired': '顾问门禁：本批授权已过期（或期限字段不可信），需要重新 advisor_plan。',
   'quota-exhausted': '顾问门禁：本批授权的额度/续期次数已用完，需要 advisor_renew 或重新 advisor_plan。',
   'tool-snapshot-mismatch': '顾问门禁：工具集变化（插件重载/新装工具），上一批授权已作废，请重新 advisor_plan。',
+  'path-not-allowed': '顾问门禁：这次写入的目标路径不在这批计划的 allowedPaths 里（或计划没声明路径），已拒绝。请在 advisor_plan 里用 allowed_paths 明确列出要改的路径。',
+  'shell-not-declared': '顾问门禁：命令类工具需要在计划里显式声明 allow_shell=true 才放行（声明的是"允许执行命令"，不保证写入范围）。请重新 advisor_plan 并声明，或改用受路径约束的写工具。',
 }
 
 function deny(reason, extra = {}) {
@@ -1336,7 +1465,7 @@ function finitePositive(value) {
   return Number.isFinite(value) && value > 0
 }
 
-function evaluateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted } = {}) {
+function evaluateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted, params = null } = {}) {
   if (!state || !state.enabled) return { allow: true, why: 'off' }
   if (isReadOnly(name)) return { allow: true, why: 'read-only' }
   if (state.unknownSession) return deny('unknown-session')
@@ -1388,6 +1517,26 @@ function evaluateDecision(state, name, currentVersion, now = Date.now(), { trust
     return deny('tool-snapshot-mismatch')
   }
 
+  // —— 路径级授权（模型 A）——
+  // 有明确目标路径的工具：必须落在这批计划声明的 allowedPaths 之内，否则拒。
+  // 这是硬约束（不是声明）：改插件/AI 自己都绕不过，因为判定在读参数时就已经做了。
+  if (PATH_BOUNDED_TOOLS.has(name) || PATH_OPTION_TOOLS.has(name)) {
+    const allowed = Array.isArray(g.allowedPaths) ? g.allowedPaths : []
+    if (allowed.length === 0) {
+      return deny('path-not-allowed', { why: 'none-declared', tool: name })
+    }
+    const targets = pathTargets(params)
+    if (targets.length === 0) return deny('path-not-allowed', { why: 'no-target', tool: name })
+    const outside = targets.filter((target) => !targetInside(target, allowed))
+    if (outside.length > 0) {
+      return deny('path-not-allowed', { why: 'outside', tool: name, paths: outside.slice(0, 5) })
+    }
+  }
+  // 可能写任意路径的宿主工具：必须在计划里显式声明 allowShell。声明≠约束，文档里如实写。
+  if (isDeclaredWriteTool(name) && g.allowShell !== true) {
+    return deny('shell-not-declared', { tool: name })
+  }
+
   // 闲置超时：还能续期时给出 needs-renewal（不直接作废），否则按额度耗尽处理。
   const idleTimeout = finitePositive(g.idleTimeout) ? g.idleTimeout : Number(DEFAULTS.grantTtlMs || 30 * 60 * 1000)
   const idleExpired = now - Number(g.lastActivityAt || g.at || 0) > idleTimeout
@@ -1418,8 +1567,8 @@ function evaluateDecision(state, name, currentVersion, now = Date.now(), { trust
 }
 
 // 真实执行入口：先跑纯判定，**只有 allow 时**才执行副作用（消费额度、滑动闲置窗口）。
-function gateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted } = {}) {
-  const decision = evaluateDecision(state, name, currentVersion, now, { trusted })
+function gateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted, params = null } = {}) {
+  const decision = evaluateDecision(state, name, currentVersion, now, { trusted, params })
   if (!decision.allow) {
     // 失效的 grant 就地作废（保留原因给 /state 与审计看）。
     if (state.grant && ['version-mismatch', 'grant-expired', 'quota-exhausted', 'tool-snapshot-mismatch', 'plan-mismatch'].includes(decision.reason)) {
@@ -1457,11 +1606,26 @@ function journalPaths(params) {
 
 function journalAppend(state, { toolName, params, versionBefore, versionAfter, purpose }) {
   if (!Array.isArray(state.journal)) state.journal = []
+  // 审计证据不能只留"400 字摘要"：这里存脱敏后的完整参数（上限 8000 字符，
+  // 超限时另存 sha256 + 原始长度，并在条目上标 paramsTruncated，避免"截断却不自知"）。
+  let paramsText = ''
+  try {
+    paramsText = redactForAdvisor(JSON.stringify(params ?? null)).text
+  } catch {
+    paramsText = String(params ?? '')
+  }
+  const paramsSha256 = sha256(paramsText)
+  const LIMIT = 8000
   state.journal.push({
     operationId: randomId(4),
     planId: state.activePlanId || '',
     toolName,
     targetPaths: journalPaths(params),
+    params: paramsText.length > LIMIT ? `${paramsText.slice(0, LIMIT)}…` : paramsText,
+    paramsSha256,
+    paramsChars: paramsText.length,
+    paramsTruncated: paramsText.length > LIMIT,
+    status: 'authorized',
     versionBefore: String(versionBefore || '').slice(0, 12),
     versionAfter: String(versionAfter || '').slice(0, 12),
     purpose: purpose || 'execute',
@@ -1597,12 +1761,27 @@ export function apply(ctx, rawConfig = {}) {
               required: true,
               description: '自然语言正文：要做什么、为什么这么做、当前方案、已核实的事实与出处、还没确认的点、希望顾问重点判断什么。',
             },
+            allowed_paths: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                '（可选，模型 A）本批允许写的路径前缀，相对工作区，例如 ["plugins/advisor-toggle"]。拿到 GO 后 edit/write/apply_patch/decompress 的目标路径必须落在这些前缀之内，越界一律拒绝；不传就等于不允许任何路径写入。',
+            },
+            allow_shell: {
+              type: 'boolean',
+              description:
+                '（可选，模型 A）是否允许本批执行命令类工具（pwsh / decompress / cua_* / windows_* 等）。它只是"执行许可"，不约束这些工具写入哪些路径——那是声明不是沙箱，真实风险写在 docs/threat-model.md。默认 false。',
+            },
           },
           output: {
             schema: { type: 'object', additionalProperties: true },
             render: (_args, value) => [{ type: 'text', text: formatAdvisorResult(value) }],
           },
           async execute(args, exec) {
+            // 声明必须在评审之前落到会话状态上：plan GO 时 makeGrant 会把它抄进 permit。
+            const state = stateOf(sessionOf(exec))
+            state.planPaths = normalizeAllowedPaths(args?.allowed_paths)
+            state.planShell = Boolean(args?.allow_shell)
             return review(ctx, exec, 'plan', args.message)
           },
         }),
@@ -1720,9 +1899,27 @@ export function apply(ctx, rawConfig = {}) {
         ].join(''),
       }
     }
+    // 符号链接/junction 兜底：词法上在允许目录里、实际指向外面 → 拒。
+    // 这一步在 tools/pre-execute 里做（异步），因为 evaluateDecision 是纯同步函数。
+    if (PATH_BOUNDED_TOOLS.has(name) || PATH_OPTION_TOOLS.has(name)) {
+      const allowed = Array.isArray(state.grant?.allowedPaths) ? state.grant.allowedPaths : []
+      const targets = pathTargets(exec?.params || null)
+      if (allowed.length > 0 && targets.length > 0) {
+        for (const target of targets) {
+          if (await realpathEscape(target, allowed)) {
+            state.deniedStreak += 1
+            await log(`advisor:path-denied session=${sessionId} tool=${name} target=${target} reason=symlink-escape`)
+            return {
+              kind: 'deny',
+              reason: `顾问门禁：目标路径 ${target} 解析后落在本批 allowedPaths 之外（符号链接/junction），已拒绝。`,
+            }
+          }
+        }
+      }
+    }
     const currentVersion = await contentVersion({ maxAgeMs: 0 })
     state.version = currentVersion
-    const decision = gateDecision(state, name, currentVersion, Date.now(), { trusted: versionTrusted })
+    const decision = gateDecision(state, name, currentVersion, Date.now(), { trusted: versionTrusted, params: exec?.params || null })
     if (decision.allow) {
       state.deniedStreak = 0
       if (decision.why === 'degraded') await log(`host:degraded-allow session=${sessionId} tool=${name}`)
@@ -1832,6 +2029,9 @@ export function apply(ctx, rawConfig = {}) {
               // v4：把「阶段 / 执行许可 / 收尾许可 / 写入日志」显式暴露，
               // 让界面与排障都能一眼看出现在到底卡在哪一层（顾问 M1/M4 的要求）。
               phase: state.phase,
+              // 模型 A：当前这批活声明了什么（有 permit 就看 permit，否则看最近一次 plan 的声明）。
+              allowedPaths: state.grant?.allowedPaths || normalizeAllowedPaths(state.planPaths),
+              allowShell: state.grant ? Boolean(state.grant.allowShell) : Boolean(state.planShell),
               permit: state.grant
                 ? {
                     id: state.grant.id,
@@ -1847,7 +2047,7 @@ export function apply(ctx, rawConfig = {}) {
                   }
                 : null,
               // v11：插件不再签发写许可，收尾阶段纯只读；写面画像按真实工具表动态统计（P2）。
-              writeSurface: await writeSurface(),
+              writeSurface: await writeSurface(state.paused ? 'paused' : String(state.phase || 'idle')),
               journal: journalAudit(state),
               // 红点 = 同一版本上连续 3 次 NO-GO（版本变了要重新累积）。
               alert: state.noGoStreak >= 3 && state.noGoVersion === state.version,
@@ -1939,6 +2139,9 @@ export function apply(ctx, rawConfig = {}) {
               // 新的一轮开关 = 新计划：计划号与工具快照一起重置。
               state.activePlanId = ''
               state.planDigest = ''
+              // 模型 A：开关一开等于本批声明清零，必须重新 advisor_plan 才能声明路径/命令权限。
+              state.planPaths = []
+              state.planShell = false
               state.toolSnapshotDigest = (await toolSnapshotOf()).digest
               state.toolSnapshotTrusted = false
               state.degradedAt = 0
@@ -2120,6 +2323,15 @@ export const __test = {
   journalAppend,
   journalAudit,
   journalPaths,
+  // v11.1（模型 A）：路径级授权的纯函数，测试直接打这里，不走 HTTP。
+  normalizeAllowedPaths,
+  pathTargets,
+  targetInside,
+  realpathEscape,
+  isDeclaredWriteTool,
+  PATH_BOUNDED_TOOLS,
+  PATH_OPTION_TOOLS,
+  DECLARED_WRITE_TOOLS,
   DEFAULTS,
   isVersionTrusted: () => versionTrusted,
   resetVersionCache: () => {

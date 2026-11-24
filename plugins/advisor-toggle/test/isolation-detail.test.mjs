@@ -19,10 +19,12 @@ const body = source.slice(source.indexOf('async function auditIsolation'), sourc
 test('detail 不改变任何判定字段（与普通 /isolation 完全一致）', async () => {
   const plain = await auditIsolation('executing', 'root', false)
   const withDetail = await auditIsolation('executing', 'root', true)
-  const { allowedNames, readOnlyNames, ...rest } = withDetail
+  const { allowedNames, readOnlyNames, pathBoundedTools, declaredWriteTools, ...rest } = withDetail
   assert.deepEqual(rest, plain, 'detail 版本除新增清单外必须逐字段相同')
   assert.ok(Array.isArray(allowedNames), 'detail 必须给出 allowedNames')
   assert.ok(Array.isArray(readOnlyNames), 'detail 必须给出 readOnlyNames')
+  assert.ok(Array.isArray(pathBoundedTools), 'detail 必须给出受路径约束的工具清单（模型 A）')
+  assert.ok(Array.isArray(declaredWriteTools), 'detail 必须给出只靠声明的写工具清单（模型 A）')
   assert.deepEqual(allowedNames, plain.allowed, 'allowedNames 必须就是 allowed 本身')
 })
 

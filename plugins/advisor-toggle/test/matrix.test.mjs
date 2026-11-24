@@ -27,6 +27,8 @@ function stateOf(overrides = {}) {
     renewalCount: 0,
     maxRenewals: Number(DEFAULTS.maxRenewals),
     idleTimeout: 30 * 60_000,
+    allowShell: true,
+    allowedPaths: [],
     lastActivityAt: NOW - 1000,
   }
   return {
@@ -135,7 +137,7 @@ test('writeSurface：当前状态没有执行授权 → 可写放行数为 0', a
   mod.__test.setHostContext({
     get: () => ({ definitions: () => [{ name: 'read' }, { name: 'pwsh' }, { name: 'write' }] }),
   })
-  const ws = await writeSurface()
+  const ws = await writeSurface('idle')
   assert.equal(ws.writableAllowCount, 0, '没有授权时不得放行任何宿主写工具')
   assert.deepEqual(ws.selfWriteTools, [])
   assert.equal(ws.toolTotal, 3)

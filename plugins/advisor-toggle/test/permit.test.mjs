@@ -33,6 +33,8 @@ function permitState(overrides = {}) {
       renewalCount: 0,
       maxRenewals: 3,
       idleTimeout: 30 * 60_000,
+      allowShell: true,
+      allowedPaths: [],
       lastActivityAt: NOW - 1000,
     },
     ...overrides,

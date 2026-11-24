@@ -132,3 +132,40 @@
 | 纯判定 / 无副作用审计 | `evaluateDecision()`、`auditIsolation()` + `test/isolation-detail.test.mjs`（源码断言不含 `gateDecision(`/`used++`/`state.phase =`） |
 | 旧计划不能借漂移续命 | `planMismatch` 判定 + `test/p0.test.mjs`「不属于当前计划」 |
 | 工具快照变化不算漂移 | `snapshotMismatch` 判定 + `test/p0.test.mjs`「工具集变化拒绝」 |
+
+## 11. 模型 A：路径级授权（v11.1，2026-11-24）
+
+顾问判 v11 NO-GO 的核心缺口是：executing 阶段 `pwsh` / `decompress` / `cua_*` / `windows_*` 这些工具能写任意路径，计划里没声明范围。用户裁决「部分实现 + 明文划界」，顾问最终选**模型 A（显式授权 + 事后审计）**。本节的每一条都是这个模型的定义，不许被后续文档改写成更强的承诺。
+
+### 11.1 模型 A 是什么、不是什么
+
+- **是**：在动手前要求"明确授权"（计划里声明路径与命令权限），在动手后要求"可追溯"（journal 记工具、参数、前后版本）。
+- **不是**：文件系统沙箱、强制隔离、写入范围证明。`allowShell=true` 一旦声明，shell 就能写授权目录之外的文件，插件**不知道也拦不住**。
+
+### 11.2 两档约束
+
+| 工具类 | 约束方式 | 违反时 |
+|--------|----------|--------|
+| `edit` / `write` / `apply_patch` / `multi_edit` | **硬约束**：目标路径（`path`/`file_path`/`paths`…）必须落在 `allowedPaths` 内；未声明即拒 | `path-not-allowed`（`none-declared` / `no-target` / `outside`） |
+| `decompress` | **硬约束**：`toFile`/`path` 同上 | `path-not-allowed` |
+| `pwsh` / `cua_driver_native_*` / `windows_*` / `skillopt_*` / `team` / `plugin_manager` / `gpt_*` | **声明**：必须 `allowShell=true` 才放行，写入范围不受约束 | `shell-not-declared` |
+
+### 11.3 残余风险（明确接受，不粉饰）
+
+1. **shell 任意写**：`allowShell=true` + `pwsh` 等于把整台机器的当前用户权限交出去。`journal` 记录的是"命令原文"，不是"它写了哪些文件"。
+2. **路径校验竞态**：`targetInside()` 是词法判定（`resolve` + 逐段 `sep` 比较），`realpathEscape()` 会解析最近存在的祖先，但**检查与写入之间仍有窗口**——父目录可在这段时间被换成 junction。这是已知的 TOCTOU，不是"已解决"。
+3. **Windows 8.3 短路径**：`ADMINI~1` 与 `Administrator` 字面不等，`realpathEscape()` 先把授权根各自 realpath 再比较（踩过坑，见 `test/allowed-paths.test.mjs`）。
+4. **审计作用域**：`/isolation` 的 `scope=root` 看到的是根作用域工具表；**agent 作用域里的 `pwsh`/`edit`/`write` 不在其中**，真实拦截发生在 `tools/pre-execute`（带 `exec.agent` 作用域），两者不能互相替代。
+5. **journal 不是全量捕获**：保留最近 200 条；`params` 脱敏后超过 8000 字符会截断并标 `paramsTruncated`，同时保留 `paramsSha256` 与原始长度供核对。
+
+### 11.4 与代码的对应
+
+| 结论 | 代码/测试 |
+|------|-----------|
+| 路径硬约束 | `evaluateDecision()` 的 `path-not-allowed` 分支 + `test/allowed-paths.test.mjs` |
+| 符号链接兜底 | `realpathEscape()` + `tools/pre-execute` 里的 `advisor:path-denied reason=symlink-escape` |
+| 命令需声明 | `isDeclaredWriteTool()` + `shell-not-declared` |
+| 声明进入 permit | `makeGrant()` 抄写 `allowedPaths`/`allowShell`；`/toggle` 打开即清零 |
+| 对外可见 | `/state.allowedPaths`、`/state.allowShell`、`/isolation?detail=1` 的 `pathBoundedTools` / `declaredWriteTools` |
+| 参数可追溯 | `journalAppend()` 的 `params`/`paramsSha256`/`paramsChars`/`paramsTruncated` |
+

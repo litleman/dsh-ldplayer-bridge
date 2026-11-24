@@ -27,6 +27,15 @@ node -e "const p=require('./plugins/advisor-toggle/package.json');console.log(p.
 
 > 注意：grep 只能证明「当前代码里出现了哪些名字」，不能证明「没有别的写法」（别名、间接引用、动态 require）。所以本清单与代码同版本维护，**改动写入逻辑必须同步改这里**；`test/no-write-surface.test.mjs` 会对生产文件做结构断言，防止写面回潮。
 
+## 与「宿主工具写面」的区别（v11.1 模型 A）
+
+本文件只统计**插件自己**的写入。`edit`/`write`/`apply_patch`/`pwsh`/`cua_*` 这些是**宿主工具**的写面，插件管不到它们的实现：
+
+- 插件能做的是**授权前**的路径校验（`allowed_paths`）与**执行后**的审计（journal），不是拦截宿主工具内部行为。
+- 因此"插件零写面"不等于"这一批活只改允许的路径"——后者依赖 `allowed_paths` 声明 + 事后 diff 核对。
+- `docs/threat-model.md` 第 11 节列出这条边界与残余风险；改动这两档约束的语义时，三份文档（本文件、威胁模型、README）必须一起改。
+
+
 ## 生产代码的写入点（v11 共 4 处，全部固定路径）
 
 | # | 位置 | 目标 | 语义 | 失败处理 |

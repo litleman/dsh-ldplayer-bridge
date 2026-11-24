@@ -48,7 +48,7 @@ test('Host 半不再删除文件（写后复核失败也不 unlink）', () => {
 
 test('/state 不再暴露 finalize 许可，改为动态 writeSurface', () => {
   assert.equal(indexCode.includes('finalize: state.finalizePermit'), false)
-  assert.ok(indexCode.includes('writeSurface: await writeSurface()'), '/state 必须用动态写面画像')
+  assert.ok(/writeSurface: await writeSurface\(/.test(indexCode), '/state 必须用动态写面画像（按当前 phase/paused 计算）')
 })
 
 test('收尾阶段是纯只读（finalizePermit 与写许可状态已移除）', () => {
