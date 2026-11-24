@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readFile, readdir, rm, writeFile, appendFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 
@@ -57,20 +57,30 @@ const DEFAULTS = {
   maxRenewals: 3,
   totalOpsPerPlan: 600,
   totalWindowMs: 4 * 60 * 60 * 1000,
-  // 收尾许可（顾问 M4）：review GO 之后只允许做收尾动作，不是"再写一次"。
-  // 允许的工具与路径都在下面两张表里，用完即焚。
-  finalizeOps: 5,
-  finalizeMs: 10 * 60 * 1000,
   // 浏览器半必须先 POST /hello 注册才允许操作开关（默认关：老页面/curl 调试仍可用，
   // 打开后未注册会话一律 403，防"任何本机进程都能替用户点开关"）。
   requireClientNonce: false,
+  // 只在验收演练时打开的开关（默认 false）。
+  // 光靠"默认 false"不等于生产安全——profile 的 config 可以把它写开，
+  // 所以这两个开关必须同时满足 `DSH_ADVISOR_DEV === '1'` 才生效（见 devFlags()）。
+  devExtraTool: false,
 }
 
-// 收尾许可允许的动作：git 只读+提交类命令，以及文档/笔记类写入。
-// 这里故意用"白名单正则 + 白名单目录"双约束：收尾不是"再执行一遍计划"。
-const FINALIZE_COMMAND_RE = /^\s*git\s+(status|diff|log|add|commit)\b/i
-const FINALIZE_PATH_RE = /(^|[\\/])(docs|gpt-notes)([\\/]|$)|(^|[\\/])(README|CHANGELOG|AGENTS)\.md$/i
+// 演练开关的生产隔离：环境变量没开时，配置里写什么都不算数。
+// 生产（未设 DSH_ADVISOR_DEV）→ 两个开关强制 false：不会注册假工具，也不会摘掉收尾工具。
+export function devFlags(config = {}) {
+  const gate = process.env.DSH_ADVISOR_DEV === '1'
+  return {
+    gate,
+    extraTool: gate && Boolean(config.devExtraTool),
+  }
+}
 
+// 写面（v11）：插件**不再自己写文件**。
+// 收尾写文件（advisor_finalize_note / finalizeCreate / trustedRoots / relUnderRoot）已整体删除：
+// Windows + Node 只有路径式 open()，无法把"创建"绑定到已验证的目录句柄，
+// realpath 校验与 open(...,'wx') 之间存在 TOCTOU（父目录可被换成 junction → 越权写）。
+// 所以收尾阶段改为**纯只读**：交付内容由 Agent 直接输出，或由用户关掉开关后自行写入。
 // 运行期解析结果（apply() 时异步填充）。未填充或未就绪时一律 fail-closed：
 // 不拿 process.cwd() 兜底，也不把"没配置"当成"配置成当前目录"（顾问 GO 的方案 A/B 组）。
 let RESOLVED = null
@@ -189,10 +199,10 @@ function stateOf(sessionId) {
       // idle → planning →(plan GO) executing →(review HOLD/NO-GO) paused →(新 plan GO) executing
       //                                        →(review GO) delivering（只给 finalizePermit）
       phase: 'idle',
+      // paused 是独立布尔状态（不是 phase 的一种）：判定优先于 phase，恢复必须重新 plan 拿 GO。
+      paused: false,
       // permit = 执行许可（原 grant 的更严格版本）：带累计额度、续期次数、总期限。
       permit: null,
-      // finalizePermit = 收尾许可：只允许 git 提交与文档写入，用完即焚（M4）。
-      finalizePermit: null,
       // 写入日志（M3）：每个放行的写操作记 planId / 工具 / 目标路径 / 前后快照摘要。
       // plan/review 时用它核对「本次所有变更都能被解释」，对不上的路径要报出来。
       journal: [],
@@ -796,6 +806,158 @@ function scopeOfExec(exec) {
   return exec?.agent || undefined
 }
 
+// 唯一的授权审计（顾问 R3/P2）：对生产工具表逐工具跑**纯判定** `evaluateDecision()`。
+// 指标全部动态统计，禁止硬编码：
+//   selfWriteTools      —— 本插件自己注册的非只读工具（写面删除后恒为 []）
+//   hostWritableAllowed —— 被放行的宿主写工具名
+//   writableAllowCount  —— hostWritableAllowed.length
+// 审计本身零副作用：只读工具表 + 纯判定，不签发/不续期/不消费额度/不写状态。
+const SELF_TOOLS = new Set(['advisor_plan', 'advisor_review', 'advisor_renew', 'advisor_finalize_note'])
+const AUDIT_STATES = ['idle', 'planning', 'executing', 'executing-invalid', 'delivering', 'paused']
+
+function probeState(kind, now = Date.now()) {
+  const grant = {
+    id: 'isolation-probe',
+    planId: 'isolation',
+    version: 'isolation',
+    digest: 'isolation',
+    toolSnapshotDigest: 'isolation',
+    expiresAt: now + 60 * 1000,
+    totalDeadline: now + 10 * 60 * 1000,
+    maxOps: 5,
+    used: 0,
+    totalOpsLimit: 100,
+    totalUsed: 0,
+    renewalCount: 0,
+    maxRenewals: 3,
+    idleTimeout: 10 * 60 * 1000,
+    lastActivityAt: now,
+    at: now,
+  }
+  const base = {
+    enabled: true,
+    paused: false,
+    phase: 'executing',
+    activePlanId: 'isolation',
+    toolSnapshotDigest: 'isolation',
+    toolSnapshotTrusted: true,
+    grant,
+    stateVersion: 0,
+    generation: 0,
+  }
+  if (kind === 'idle') return { ...base, phase: 'idle', grant: null }
+  if (kind === 'planning') return { ...base, phase: 'planning', grant: null }
+  if (kind === 'delivering') return { ...base, phase: 'delivering', grant: null }
+  if (kind === 'paused') return { ...base, paused: true }
+  if (kind === 'executing-invalid') return { ...base, grant: { ...grant, expiresAt: now - 1000, totalDeadline: now - 1000 } }
+  return base
+}
+
+async function toolNames(scopeName) {
+  const tools = resolveTools()
+  const out = { source: '', names: [], note: '' }
+  if (!tools) return { ...out, note: 'no-tools-service' }
+  const scope = scopeName === 'session' ? HOST_CTX || undefined : undefined
+  let entries = null
+  try {
+    if (typeof tools.definitions === 'function') {
+      const result = tools.definitions(scope)
+      entries = (result && typeof result.then === 'function' ? await result : result) || []
+      out.source = 'tools.definitions'
+    } else if (typeof tools.list === 'function') {
+      entries = (await tools.list()) || []
+      out.source = 'tools.list'
+    } else {
+      return { ...out, note: 'no-definitions' }
+    }
+  } catch (error) {
+    return { ...out, note: `definitions-threw:${String(error && error.message)}` }
+  }
+  out.names = (Array.isArray(entries) ? entries : []).map((item) => String(item?.name || '')).filter(Boolean)
+  if (out.names.length === 0) out.note = 'empty-registry'
+  return out
+}
+
+// 审计：对给定“状态”逐工具判定（纯函数），返回该状态下的写权限画像。
+async function auditIsolation(stateName = 'executing', scopeName = 'root') {
+  // 未知 scope 必须显式报错，绝不回退到另一个 scope（否则审计报告会冒充分区结果）。
+  if (scopeName !== 'root' && scopeName !== 'session') throw new Error(`unknown-scope:${scopeName}`)
+  const kind = AUDIT_STATES.includes(stateName) ? stateName : 'executing'
+  const { source, names, note } = await toolNames(scopeName)
+  const base = {
+    scope: scopeName,
+    state: kind,
+    probeSource: kind === 'executing' ? 'live' : 'simulated',
+    source,
+    complete: false,
+    total: 0,
+    readOnlyCount: 0,
+    allowed: [],
+    deniedCount: 0,
+    deniedSample: [],
+    selfWriteTools: [],
+    hostWritableAllowed: [],
+    writableAllowCount: 0,
+    ok: false,
+    note,
+  }
+  if (names.length === 0) return base
+  const now = Date.now()
+  const probe = probeState(kind, now)
+  const allowed = []
+  const denied = []
+  for (const name of names) {
+    let decision
+    try {
+      decision = evaluateDecision(probe, name, 'isolation', now, { trusted: true })
+    } catch (error) {
+      decision = { allow: false, reason: `threw:${String(error && error.message)}` }
+    }
+    if (decision && decision.allow) allowed.push(name)
+    else denied.push(name)
+  }
+  const allowedWritable = allowed.filter((name) => !isReadOnly(name))
+  const selfWriteTools = allowedWritable.filter((name) => SELF_TOOLS.has(name))
+  const hostWritableAllowed = allowedWritable.filter((name) => !SELF_TOOLS.has(name))
+  const writableAllowCount = hostWritableAllowed.length
+  const expectWritable = kind === 'executing'
+  const ok = selfWriteTools.length === 0 && (expectWritable ? writableAllowCount > 0 : writableAllowCount === 0)
+  return {
+    ...base,
+    complete: true,
+    total: names.length,
+    readOnlyCount: names.filter((name) => isReadOnly(name)).length,
+    allowed,
+    deniedCount: denied.length,
+    deniedSample: denied.slice(0, 25),
+    selfWriteTools,
+    hostWritableAllowed,
+    writableAllowCount,
+    ok,
+  }
+}
+
+// /state 的写面画像：按当前真实状态算一遍（live），不落盘、不消费。
+async function writeSurface() {
+  const names = (await toolNames('root')).names
+  const probe = { enabled: true, paused: false, phase: 'executing', activePlanId: 'x', toolSnapshotDigest: 'x', grant: null, stateVersion: 0, generation: 0 }
+  const now = Date.now()
+  const allowed = []
+  for (const name of names) {
+    if (evaluateDecision(probe, name, 'x', now, { trusted: false }).allow) allowed.push(name)
+  }
+  const allowedWritable = allowed.filter((name) => !isReadOnly(name))
+  const selfWriteTools = allowedWritable.filter((name) => SELF_TOOLS.has(name))
+  const hostWritableAllowed = allowedWritable.filter((name) => !SELF_TOOLS.has(name))
+  return {
+    selfWriteTools,
+    hostWritableAllowed,
+    writableAllowCount: hostWritableAllowed.length,
+    selfToolCount: SELF_TOOLS.size,
+    toolTotal: names.length,
+  }
+}
+
 // 写前复核工具集（R2）：授权签的是"当时那份工具表"，每次写都要重新取一次再比，
 // 不允许拿授权时的旧摘要当作现状。变化/读不到 → 作废本批授权并拒绝。
 async function enforceToolSnapshot(state, scope) {
@@ -1024,7 +1186,7 @@ async function reviewLocked(ctx, exec, sessionId, state, phase, message) {
     state.grantExpired = ''
     // 新计划进入执行阶段：清空收尾许可与写入日志（journal 只描述本计划的改动）。
     state.phase = 'executing'
-    state.finalizePermit = null
+    state.paused = false
     state.journal = []
     await log(
       `advisor:grant-created session=${sessionId} batch=${state.grant.id} plan=${planId} version=${version} digest=${state.grant.digest.slice(0, 16)} ttlMs=${DEFAULTS.grantTtlMs} maxOps=${state.grant.maxOps} totalOps=${state.grant.totalOpsLimit} renewals=${state.grant.maxRenewals}`,
@@ -1045,25 +1207,16 @@ async function reviewLocked(ctx, exec, sessionId, state, phase, message) {
       )
       state.grant = null
     }
+    // v11：收尾阶段纯只读（插件不再写文件、不再签发写许可）。
     state.phase = 'delivering'
-    state.finalizePermit = {
-      id: randomId(8),
-      planId: state.activePlanId,
-      at: Date.now(),
-      expiresAt: Date.now() + Number(DEFAULTS.finalizeMs || 10 * 60 * 1000),
-      maxOps: Number(DEFAULTS.finalizeOps || 5),
-      used: 0,
-    }
-    await log(
-      `advisor:finalize-issued session=${sessionId} plan=${state.activePlanId} maxOps=${state.finalizePermit.maxOps} ms=${DEFAULTS.finalizeMs}`,
-    )
+    state.paused = false
+    await log(`advisor:delivering session=${sessionId} plan=${state.activePlanId} mode=read-only`)
   }
   if (verdict === 'NO-GO' || verdict === 'HOLD') {
     // 三态里的 REJECTED / NEEDS_REVISION（顾问 v4 M1）：暂停本批执行，撤销执行许可。
     // 关键点：**不**自动把清单当成"下一版批准"——清单只说要改什么，
     // 改完必须重新 plan 拿新 GO（否则 NO-GO 就失去否决作用）。
-    state.phase = 'paused'
-    state.finalizePermit = null
+    state.paused = true
     if (state.grant) {
       await log(`advisor:grant-suspended session=${sessionId} batch=${state.grant.id} verdict=${verdict}`)
       state.grant = null
@@ -1146,172 +1299,138 @@ function isReadOnly(name) {
 // - 顾问不可达且已降级 → 放行并记账，避免把用户一起锁住。
 const DEGRADE_WINDOW_MS = 30 * 60 * 1000
 
-function gateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted, params = null } = {}) {
-  if (!state?.enabled) return { allow: true, why: 'off' }
+// 门禁判定内核（纯函数）：live 与 simulated 审计、真实执行路径**都只调它**。
+// 只读 state 快照、只计算 allow/deny 与 reason；不写字段、不消费额度、不改 lastActivityAt、不产生审计。
+// 优先级（高→低，短路返回，保证每个拒绝只有一个稳定 reason）：
+//   disabled → unknown-session → paused → phase-not-executing → plan-mismatch
+//   → version-mismatch → grant-expired → quota-exhausted → tool-snapshot-mismatch → 放行
+const DENY_TEXT = {
+  disabled: '顾问开关没有打开。',
+  'unknown-session': '顾问门禁：识别不出当前会话，无法确认授权，已拒绝。',
+  paused: '顾问门禁：上一轮评审未通过，本批执行已暂停（暂无写权限）。按评审意见改完方案后重新 advisor_plan 提交修订版，拿到新的 GO 才能继续；不要重试同一个调用。',
+  'phase-not-executing': '顾问门禁：当前阶段没有执行授权（需要先 advisor_plan 拿到 GO；收尾阶段只读）。',
+  'plan-mismatch': '顾问门禁：授权不属于当前计划（或计划号缺失），已作废。请重新 advisor_plan。',
+  'version-mismatch': '顾问门禁：版本不可信（git 不可用或内容摘要对不上），不允许复用旧授权。',
+  'grant-expired': '顾问门禁：本批授权已过期（或期限字段不可信），需要重新 advisor_plan。',
+  'quota-exhausted': '顾问门禁：本批授权的额度/续期次数已用完，需要 advisor_renew 或重新 advisor_plan。',
+  'tool-snapshot-mismatch': '顾问门禁：工具集变化（插件重载/新装工具），上一批授权已作废，请重新 advisor_plan。',
+}
+
+function deny(reason, extra = {}) {
+  return { allow: false, reason, why: reason, message: DENY_TEXT[reason] || '顾问门禁：已拒绝。', ...extra }
+}
+
+function finitePositive(value) {
+  return Number.isFinite(value) && value > 0
+}
+
+function evaluateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted } = {}) {
+  if (!state || !state.enabled) return { allow: true, why: 'off' }
   if (isReadOnly(name)) return { allow: true, why: 'read-only' }
-  // 收尾阶段（review GO 之后）：只允许 finalizePermit 里那几类动作，用完即焚（顾问 M4）。
-  if (state.phase === 'delivering' || state.finalizePermit) {
-    return finalizeDecision(state, name, params, now)
+  if (state.unknownSession) return deny('unknown-session')
+  if (state.paused) return deny('paused', { verdict: state.verdict || '' })
+  if (state.phase !== 'executing') return deny('phase-not-executing', { phase: state.phase || 'idle' })
+
+  const g = state.grant
+  if (!g) {
+    // 降级窗口（onAdvisorUnreachable=degrade）：顾问不可达时临时放行普通写，窗口外回到拦截。
+    const degradedAt = Number(state.degradedAt || 0)
+    if (degradedAt > 0 && now - degradedAt <= 30 * 60 * 1000) return { allow: true, why: 'degraded' }
+    return deny('plan-mismatch', { why: 'no-grant' })
   }
-  // 暂停阶段（HOLD / NO-GO）：没有任何写权限，必须重新提交修订计划拿新 GO（顾问 M1）。
-  if (state.phase === 'paused') {
-    return {
-      allow: false,
-      why: 'paused',
-      reason: [
-        `顾问门禁：上一轮评审结论是 ${state.verdict || 'HOLD/NO-GO'}，本批执行已暂停（暂无写权限）。`,
-        '这并不代表方案被否掉——按评审意见改完方案后，重新调用 advisor_plan 提交修订版，拿到新的 GO 即可继续。',
-        '不要重试同一个调用，它不会有不同结果。',
-      ].join(''),
-    }
-  }
-  // 授权是「一批活」，不是永久通行证：过期、超额、版本不可信、计划号不符、
-  // 工具集变过，任一命中都失效（对抗评审 HIGH-1 / P0）。
-  if (state.grant) {
-    const g = state.grant
-    // 字段缺失一律按"不匹配"处理（fail-closed）：绝不能因为某个字段没写就跳过比较。
-    const expiresAt = Number(g.expiresAt || 0)
-    const expired = !expiresAt || now > expiresAt
-    // 额度可以按批次覆盖（测试与将来调参用），默认取配置值。
-    const maxOps = Number(g.maxOps || DEFAULTS.maxOpsPerGrant || 300)
-    const overOps = Number(g.used || 0) >= maxOps
-    // 累计额度（顾问 M2）：续期可以顺延时间，但不许重置这两项。
-    const totalOpsLimit = Number(g.totalOpsLimit || DEFAULTS.totalOpsPerPlan || 600)
-    const totalUsed = Number(g.totalUsed || g.used || 0)
-    const overTotalOps = totalUsed >= totalOpsLimit
-    const totalDeadline = Number(g.totalDeadline || 0)
-    const overDeadline = Boolean(totalDeadline) && now > totalDeadline
-    const renewalCount = Number(g.renewalCount || 0)
-    const maxRenewals = Number(g.maxRenewals != null ? g.maxRenewals : DEFAULTS.maxRenewals || 3)
-    const renewalsLeft = Math.max(0, maxRenewals - renewalCount)
-    // 闲置超时：真正 idle 才需要续期（滑动窗口）。
-    const idleTimeout = Number(g.idleTimeout || DEFAULTS.grantTtlMs || 30 * 60 * 1000)
-    const idleExpired = now - Number(g.lastActivityAt || g.at || 0) > idleTimeout
-    // grant 必须属于当前计划：否则「上一批活的授权」会被拿来放行新一批活。
-    const planMismatch = !g.planId || !state.activePlanId || g.planId !== state.activePlanId
-    // 工具集变过（插件重载 / 装了新工具）：授权不认新工具。
-    const snapshotMismatch = !g.toolSnapshotDigest || !state.toolSnapshotDigest || g.toolSnapshotDigest !== state.toolSnapshotDigest
-    if (!expired && !overOps && !overTotalOps && !overDeadline && trusted && !planMismatch && !snapshotMismatch) {
-      g.used = Number(g.used || 0) + 1
-      g.totalUsed = totalUsed + 1
-      g.lastActivityAt = now
-      const drift = Boolean(g.version && currentVersion && g.version !== currentVersion)
-      return {
-        allow: true,
-        why: drift ? 'granted-drift' : 'granted',
-        batchId: g.id,
-        planId: g.planId,
-        grantVersion: g.version,
-        currentVersion,
-        opsLeft: maxOps - g.used,
-        totalOpsLeft: totalOpsLimit - g.totalUsed,
-        renewalsLeft,
-      }
-    }
-    // 只有"还能续"的两种情形改写成 needs-renewal，其余一律作废并给出原因。
-    const needsRenewal = (idleExpired || overOps) && renewalsLeft && !overDeadline && !overTotalOps && trusted && !planMismatch && !snapshotMismatch
-    if (!needsRenewal) {
-      state.grantExpired = expired
-        ? 'ttl'
-        : overTotalOps
-          ? 'total-ops'
-          : overDeadline
-            ? 'total-deadline'
-            : !renewalsLeft
-              ? 'renewals'
-              : overOps
-                ? 'ops'
-                : !trusted
-                  ? 'untrusted-version'
-                  : planMismatch
-                    ? 'plan-mismatch'
-                    : 'tool-snapshot'
-      state.grant = null
-    }
-    if (needsRenewal) {
+  if (!g.planId || !state.activePlanId || g.planId !== state.activePlanId) return deny('plan-mismatch')
+  if (!trusted) return deny('version-mismatch')
+
+  // 期限必须是有限的正当时间戳：null / undefined / 数值字符串 / NaN / ±Infinity / 0 / 负数 一律按过期。
+  const okExpires = finitePositive(g.expiresAt)
+  const okDeadline = finitePositive(g.totalDeadline)
+  if (!okExpires || !okDeadline) return deny('grant-expired', { why: 'bad-deadline' })
+  if (g.totalDeadline < g.expiresAt) return deny('grant-expired', { why: 'deadline-inverted' })
+  if (now >= g.expiresAt || now >= g.totalDeadline) return deny('grant-expired', { why: 'expired' })
+
+  // 额度字段同样必须是有限正数，非法值按"额度耗尽"处理（fail-closed）。
+  const maxOps = finitePositive(g.maxOps) ? g.maxOps : NaN
+  const totalOpsLimit = finitePositive(g.totalOpsLimit) ? g.totalOpsLimit : NaN
+  const maxRenewals = Number.isFinite(g.maxRenewals) ? g.maxRenewals : Number(DEFAULTS.maxRenewals || 3)
+  if (!Number.isFinite(maxOps) || !Number.isFinite(totalOpsLimit)) return deny('quota-exhausted', { why: 'bad-quota' })
+  const used = Number(g.used || 0)
+  const totalUsed = Number(g.totalUsed || 0)
+  const renewalCount = Number(g.renewalCount || 0)
+  const renewalsLeft = Math.max(0, maxRenewals - renewalCount)
+  if (used >= maxOps || totalUsed >= totalOpsLimit || renewalCount >= maxRenewals) {
+    const why = used >= maxOps ? 'ops' : totalUsed >= totalOpsLimit ? 'total-ops' : 'renewals'
+    // 额度到顶但还能续期 → 引导续期；续期次数也用尽 → 直接作废。
+    if (renewalsLeft > 0 && why !== 'renewals') {
       return {
         allow: false,
+        reason: 'quota-exhausted',
         why: 'needs-renewal',
-        planId: g.planId,
+        message: `顾问门禁：本批授权额度已用完（累计用量：${totalUsed}/${totalOpsLimit}），需要续期。调用 advisor_renew 把当前进度交给顾问；累计额度与总期限不会被重置。剩余续期次数：${renewalsLeft}。`,
         renewalsLeft,
-        reason: [
-          idleExpired
-            ? `顾问门禁：本批授权闲置超时（${Math.round(idleTimeout / 60000)} 分钟无写入），需要续期。`
-            : '顾问门禁：本批授权的操作额度已用完，需要续期。',
-          '调用 advisor_renew 把当前进度交给顾问；顾问回 GO 就顺延（累计额度与总期限不会被重置）。',
-          `剩余续期次数：${renewalsLeft}；累计用量：${totalUsed}/${totalOpsLimit}。`,
-        ].join(''),
       }
     }
+    return deny('quota-exhausted', { why })
   }
-  if (state.degradedAt && now - state.degradedAt < DEGRADE_WINDOW_MS) {
-    return { allow: true, why: 'degraded' }
+
+  if (!g.toolSnapshotDigest || !state.toolSnapshotDigest || g.toolSnapshotDigest !== state.toolSnapshotDigest) {
+    return deny('tool-snapshot-mismatch')
   }
-  const versionText = currentVersion || state.version || '未知'
+
+  // 闲置超时：还能续期时给出 needs-renewal（不直接作废），否则按额度耗尽处理。
+  const idleTimeout = finitePositive(g.idleTimeout) ? g.idleTimeout : Number(DEFAULTS.grantTtlMs || 30 * 60 * 1000)
+  const idleExpired = now - Number(g.lastActivityAt || g.at || 0) > idleTimeout
+  if (idleExpired) {
+    const renewalsLeft = Math.max(0, maxRenewals - renewalCount)
+    if (renewalsLeft > 0) {
+      return {
+        allow: false,
+        reason: 'quota-exhausted',
+        why: 'needs-renewal',
+        message: `顾问门禁：本批授权闲置超时（${Math.round(idleTimeout / 60000)} 分钟无写入），需要续期。调用 advisor_renew 把当前进度交给顾问；累计额度与总期限不会被重置。剩余续期次数：${renewalsLeft}。`,
+        renewalsLeft,
+      }
+    }
+    return deny('quota-exhausted', { why: 'idle-no-renewal' })
+  }
+
+  const drift = Boolean(g.version && currentVersion && g.version !== currentVersion)
   return {
-    allow: false,
-    why: 'no-grant',
-    reason: [
-      state.grantExpired === 'ttl' ? `顾问门禁：上一批授权已过期（${Math.round(DEFAULTS.grantTtlMs / 60000)} 分钟），需要重新 advisor_plan。` : '',
-      state.grantExpired === 'ops' ? '顾问门禁：上一批授权已达操作上限，需要 advisor_renew 或重新 advisor_plan。' : '',
-      state.grantExpired === 'total-ops' ? `顾问门禁：本计划累计写入已达上限（${DEFAULTS.totalOpsPerPlan} 次），需要重新 advisor_plan 开新计划。` : '',
-      state.grantExpired === 'total-deadline' ? '顾问门禁：本计划的累计执行窗口（4 小时）已用完，需要重新 advisor_plan 开新计划。' : '',
-      state.grantExpired === 'renewals' ? `顾问门禁：本计划续期次数已用完（${DEFAULTS.maxRenewals} 次），需要重新 advisor_plan 开新计划。` : '',
-      state.grantExpired === 'untrusted-version' ? '顾问门禁：版本不可信（git 不可用），不允许复用旧授权。' : '',
-      state.grantExpired === 'plan-mismatch' ? '顾问门禁：上一批授权属于另一个计划，已作废。' : '',
-      state.grantExpired === 'tool-snapshot' ? '顾问门禁：工具集变化（插件重载/新装工具），上一批授权已作废。' : '',
-      `顾问门禁：本版本（${versionText}）还没有拿到 plan 的 GO。`,
-      '两条出路：① 先调 advisor_plan 把方案交给顾问；',
-      '② 点输入框左侧的「顾问已开启」胶囊把它关掉，或长按 3 秒应急解除（只写一条审计日志）。',
-      state.lastError ? `（顾问上次失败：${state.lastError}）` : '',
-    ].filter(Boolean).join(''),
+    allow: true,
+    why: drift ? 'granted-drift' : 'granted',
+    batchId: g.id,
+    planId: g.planId,
+    grantVersion: g.version,
+    currentVersion,
+    drift,
   }
 }
 
-// 收尾许可的判定：只放行"提交与文档"这一小类动作，且次数有限、用完即焚（顾问 M4）。
-// 它不能用来继续执行计划——这正是 v4 原方案里"最后一次写"没有技术定义导致的口子。
-function finalizeDecision(state, name, params, now = Date.now()) {
-  const permit = state.finalizePermit
-  if (!permit) {
-    state.phase = 'idle'
-    return { allow: false, why: 'finalize-missing', reason: '顾问门禁：收尾许可已失效。' }
+// 真实执行入口：先跑纯判定，**只有 allow 时**才执行副作用（消费额度、滑动闲置窗口）。
+function gateDecision(state, name, currentVersion, now = Date.now(), { trusted = versionTrusted } = {}) {
+  const decision = evaluateDecision(state, name, currentVersion, now, { trusted })
+  if (!decision.allow) {
+    // 失效的 grant 就地作废（保留原因给 /state 与审计看）。
+    if (state.grant && ['version-mismatch', 'grant-expired', 'quota-exhausted', 'tool-snapshot-mismatch', 'plan-mismatch'].includes(decision.reason)) {
+      state.grantExpired = decision.why || decision.reason
+      if (decision.reason !== 'quota-exhausted' || decision.why !== 'needs-renewal') state.grant = null
+    }
+    return decision
   }
-  if (now > Number(permit.expiresAt || 0)) {
-    state.finalizePermit = null
-    state.phase = 'idle'
-    return { allow: false, why: 'finalize-expired', reason: '顾问门禁：收尾许可已过期（10 分钟），如仍需收尾请重新 advisor_review。' }
-  }
-  if (Number(permit.used || 0) >= Number(permit.maxOps || DEFAULTS.finalizeOps)) {
-    state.finalizePermit = null
-    state.phase = 'idle'
-    return { allow: false, why: 'finalize-ops', reason: '顾问门禁：收尾许可的额度已用完。' }
-  }
-  const target = finalizeTarget(params)
-  if (!target.ok) {
+  if (decision.why === 'granted' || decision.why === 'granted-drift') {
+    const g = state.grant
+    const beforeUsed = Number(g.used || 0)
+    const beforeTotal = Number(g.totalUsed || 0)
+    g.used = beforeUsed + 1
+    g.totalUsed = beforeTotal + 1
+    g.lastActivityAt = now
     return {
-      allow: false,
-      why: 'finalize-scope',
-      reason: `顾问门禁：收尾阶段只允许 git 提交类命令与 docs/README 类文档写入，本次动作（${name}）不在范围内：${target.reason}`,
+      ...decision,
+      opsLeft: Number(g.maxOps) - g.used,
+      totalOpsLeft: Number(g.totalOpsLimit) - g.totalUsed,
+      renewalsLeft: Math.max(0, (Number.isFinite(g.maxRenewals) ? g.maxRenewals : DEFAULTS.maxRenewals) - Number(g.renewalCount || 0)),
     }
   }
-  permit.used = Number(permit.used || 0) + 1
-  permit.lastUsedAt = now
-  if (permit.used >= Number(permit.maxOps || DEFAULTS.finalizeOps)) {
-    // 用完即焚：不留给下一次"顺手改一点"。
-    state.finalizePermit = null
-    state.phase = 'idle'
-  }
-  return { allow: true, why: 'finalize' }
-}
-
-// 从工具参数里判定收尾动作是否在范围内。
-function finalizeTarget(params) {
-  const p = params && typeof params === 'object' ? params : {}
-  const command = typeof p.command === 'string' ? p.command : ''
-  if (command) return FINALIZE_COMMAND_RE.test(command) ? { ok: true } : { ok: false, reason: '命令不是 git status/diff/log/add/commit' }
-  const path = String(p.file_path || p.path || p.target || '')
-  if (!path) return { ok: false, reason: '拿不到目标路径，无法判定' }
-  return FINALIZE_PATH_RE.test(path) ? { ok: true, path } : { ok: false, reason: `路径不在 docs/、gpt-notes/ 或 README 类文档内：${path}` }
+  return decision
 }
 
 // 写入日志（journal，顾问 v4 M3）：每个被放行的写操作记下 planId / 工具 / 目标路径 / 前后版本。
@@ -1390,8 +1509,16 @@ function formatAdvisorResult(value) {
 }
 
 export function apply(ctx, rawConfig = {}) {
+  // DEFAULTS 是模块级对象，而重载（set_bundle false→true）**不会重新 import 这个模块**，
+  // 上一轮写进去的 config 会残留下来：验收时把 devDisableFinalizeTool 打开再关掉，
+  // 不显式复位就会一直保持"收尾工具缺失"。这两个演练开关因此每次 apply 都强制复位，
+  // 其它配置项维持既有行为（本轮不扩大改动范围）。
+  Object.assign(DEFAULTS, { devExtraTool: false, devDisableFinalizeTool: false })
   const config = { ...DEFAULTS, ...(rawConfig || {}) }
   Object.assign(DEFAULTS, config)
+  // 生产隔离：DSH_ADVISOR_DEV 不是 '1' 时，配置里把演练开关写成 true 也不生效。
+  // 注册逻辑与 apply() 复位用的是同一套判定（顾问 P0-2 的"不允许绕过"要求）。
+  const DEV = devFlags(DEFAULTS)
 
   log(`host:apply workspace=${DEFAULTS.workspace}`)
   // 解析配置：workspace 未配置/不合法时不兜底 cwd，桥状态与路径推导解耦（顾问 GO 的 A–D 组）。
@@ -1519,6 +1646,24 @@ export function apply(ctx, rawConfig = {}) {
     )
   } else {
     log('host:warn 没有 tools 服务，两个顾问工具没注册上')
+  }
+
+  // 验收专用假工具：只有 `DSH_ADVISOR_DEV=1` 且配置打开时才会注册，
+  // 否则生产环境里无论 config 怎么写都不会出现这个工具（顾问 P0-2）。
+  if (tools?.register && DEV.extraTool) {
+    ctx.effect(() =>
+      tools.register(
+        defineTool({
+          name: 'write_extra_thing_zzz',
+          description: '验收用的假写工具，只用于证明授权审计能捕获注册表变化（v11 收尾阶段纯只读，不存在任何写许可）。',
+          parameters: { path: { type: 'string', required: false, description: '随便什么路径' } },
+          output: { schema: { type: 'object', additionalProperties: true }, render: () => [{ type: 'text', text: '{"ok":false,"error":"dev tool"}' }] },
+          async execute() {
+            return { ok: false, error: 'dev tool: 不应该被放行' }
+          },
+        }),
+      ),
+    )
   }
 
   // 门禁：开关打开且没有执行批次授权时，拦下所有非只读工具。
@@ -1689,9 +1834,8 @@ export function apply(ctx, rawConfig = {}) {
                     totalDeadline: state.grant.totalDeadline,
                   }
                 : null,
-              finalize: state.finalizePermit
-                ? { id: state.finalizePermit.id, used: state.finalizePermit.used, maxOps: state.finalizePermit.maxOps, expiresAt: state.finalizePermit.expiresAt }
-                : null,
+              // v11：插件不再签发写许可，收尾阶段纯只读；写面画像按真实工具表动态统计（P2）。
+              writeSurface: await writeSurface(),
               journal: journalAudit(state),
               // 红点 = 同一版本上连续 3 次 NO-GO（版本变了要重新累积）。
               alert: state.noGoStreak >= 3 && state.noGoVersion === state.version,
@@ -1701,6 +1845,20 @@ export function apply(ctx, rawConfig = {}) {
               configError: workspaceProblem(),
               bridgeState: bridgeState(),
             })
+          }
+          // 只读审计：对生产注册表全量跑门禁判定，回答「收尾阶段是不是只放行 advisor_finalize_note」。
+          // 授权审计（R3/P2）：对生产工具表逐工具跑**纯判定**，返回写面画像。
+          // ?state=idle|planning|executing|executing-invalid|delivering|paused（默认 executing）
+          // ?scope=root|session（默认 root）；未知 scope 一律 400。
+          // 审计零副作用：不签发/不续约/不消费额度/不写状态。
+          if (req.method === 'GET' && route === '/isolation') {
+            const q = new URL(req.url, 'http://localhost').searchParams
+            const scopeName = String(q.get('scope') || 'root')
+            if (scopeName !== 'root' && scopeName !== 'session') {
+              return send(400, { error: 'unknown-scope', scope: scopeName, allowed: ['root', 'session'] })
+            }
+            const stateName = String(q.get('state') || 'executing')
+            return send(200, await auditIsolation(stateName, scopeName))
           }
           // 浏览器半注册：重启后第一个 /hello 生效（first-writer-wins），
           // 之后带别的 nonce 的页面要么是旧标签页、要么是伪造，一律 409。
@@ -1899,6 +2057,10 @@ export { capabilityText, DEFAULTS }
 
 // 测试用出口（gate.test.mjs 直接驱动这些纯函数，不需要起 harness）
 export const __test = {
+  evaluateDecision,
+  auditIsolation,
+  writeSurface,
+  probeState,
   isReadOnly,
   gateDecision,
   parseVerdict,
@@ -1918,6 +2080,8 @@ export const __test = {
   },
   toolSnapshotOf,
   enforceToolSnapshot,
+  auditIsolation,
+  devFlags,
   formatAdvisorResult,
   bindHostContext,
   buildMessage,
@@ -1937,8 +2101,7 @@ export const __test = {
   enqueue,
   userMessage,
   // v4：三态阶段与收尾许可、写入日志的纯函数入口
-  finalizeDecision,
-  finalizeTarget,
+  // v10：收尾范围（授权根自检 / 相对路径拆分 / 排他创建）
   journalAppend,
   journalAudit,
   journalPaths,

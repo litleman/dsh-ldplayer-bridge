@@ -278,14 +278,15 @@ window.__ModuleLoader__.load({
       // 不能让人以为"开关自己关掉只是个小故障、保护还在"。
       const autoOff = Boolean(state.autoOff) && !state.enabled
       // 阶段（顾问 v4 M1）：开关是"要不要评审"，阶段是"当前走到哪一步"，
-      // 许可（permit/finalize）是"现在能写什么"。三者拆开后，胶囊要把阶段也说出来，
-      // 否则"开着但暂停"看起来和"开着在干活"完全一样，人不知道要改方案重审。
+      // 许可（permit）是"现在能写什么"。v11 起收尾阶段是纯只读（插件不再写文件），
+      // paused 也改成了独立布尔字段（不再是 phase 的取值）。
       const phase = String(state.phase || '')
+      const paused = Boolean(state.paused)
       const phaseHint = state.enabled
-        ? phase === 'paused'
+        ? paused
           ? '（待修订：按评审意见改完方案后重新 advisor_plan）'
           : phase === 'delivering'
-            ? '（待收尾：只剩提交与文档可写）'
+            ? '（收尾：只读，提交请关掉开关后自己做）'
             : phase === 'executing'
               ? '（执行中）'
               : ''
@@ -301,7 +302,7 @@ window.__ModuleLoader__.load({
           'data-alert': misconfigured ? 'config' : state.alert || state.noGoStreak >= 3 ? '1' : '0',
           'data-config': pending ? 'loading' : misconfigured ? '1' : '0',
           'data-autooff': autoOff ? '1' : '0',
-          'data-phase': phase || 'idle',
+          'data-phase': paused ? 'paused' : phase || 'idle',
           'data-stale': stale ? '1' : '0',
           title: stale
             ? '顾问开关：状态同步失败，显示可能不是最新的'

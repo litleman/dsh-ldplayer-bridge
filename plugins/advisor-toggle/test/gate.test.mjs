@@ -30,27 +30,36 @@ test('只读白名单不误放行写工具', () => {
   assert.equal(isReadOnly('subagent'), false);
 });
 
-test('门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放行', () => {
+test('门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级窗口放行', () => {
   assert.equal(gateDecision({ enabled: false }, 'pwsh', 'v1').allow, true);
 
-  const on = { enabled: true, grant: null, degradedAt: 0, version: 'v1' };
+  const on = { enabled: true, phase: 'executing', grant: null, degradedAt: 0, version: 'v1' };
   const denied = gateDecision(on, 'pwsh', 'v1', Date.now(), { trusted: true });
   assert.equal(denied.allow, false);
+  assert.equal(denied.reason, 'plan-mismatch');
+  assert.match(denied.message, /advisor_plan/, '拒绝理由要给出第一条出路');
   assert.equal(gateDecision(on, 'read', 'v1', Date.now(), { trusted: true }).allow, true, '只读照旧放行');
-  assert.match(denied.reason, /advisor_plan/, '拒绝理由要给出第一条出路');
-  assert.match(denied.reason, /长按 3 秒/, '拒绝理由要给出应急出路');
 
-  const batch = () => ({
+  const full = () => ({
     id: 'b1',
     planId: 'plan-1',
     version: 'v1',
+    digest: 'd'.repeat(64),
     toolSnapshotDigest: 'snap-1',
     at: Date.now(),
     expiresAt: Date.now() + 60000,
+    totalDeadline: Date.now() + 3600000,
     maxOps: 300,
     used: 0,
+    totalOpsLimit: 600,
+    totalUsed: 0,
+    renewalCount: 0,
+    maxRenewals: 3,
+    idleTimeout: 1800000,
+    lastActivityAt: Date.now(),
   });
-  const granted = { enabled: true, activePlanId: 'plan-1', toolSnapshotDigest: 'snap-1', grant: batch(), version: 'v1' };
+  const base = { enabled: true, phase: 'executing', activePlanId: 'plan-1', toolSnapshotDigest: 'snap-1', version: 'v1' };
+  const granted = { ...base, grant: full() };
   assert.equal(gateDecision(granted, 'pwsh', 'v1', Date.now(), { trusted: true }).allow, true);
   assert.equal(granted.grant.used, 1, '每次放行都要记一次用量');
   assert.equal(
@@ -59,57 +68,59 @@ test('门禁：关着放行、开着无 GO 拒绝、GO 授权整批、降级放�
     'GO 授权的是执行批次，版本漂移不撤权（否则批准去改 = 改完就失效）',
   );
 
-  const degraded = { enabled: true, grant: null, degradedAt: Date.now(), version: 'v1' };
+  const degraded = { ...base, grant: null, degradedAt: Date.now() };
   assert.equal(gateDecision(degraded, 'pwsh', 'v1', Date.now(), { trusted: true }).allow, true, '降级窗口内放行并记账');
 
-  const expired = { enabled: true, grant: null, degradedAt: Date.now() - 31 * 60 * 1000, version: 'v1' };
-  assert.equal(gateDecision(expired, 'pwsh', 'v1', Date.now(), { trusted: true }).allow, false, '降级有窗口，过期回到拦截');
+  const stale = { ...base, grant: null, degradedAt: Date.now() - 31 * 60 * 1000 };
+  assert.equal(gateDecision(stale, 'pwsh', 'v1', Date.now(), { trusted: true }).allow, false, '降级有窗口，过期回到拦截');
 });
 
-test('第一批授权过期 / 超额后失效，并说明原因', () => {
-  const old = {
+test('第一批授权过期 / 额度耗尽 / 续期用尽都会拒绝并作废授权', () => {
+  const mk = (grantPatch = {}) => ({
     enabled: true,
+    phase: 'executing',
     activePlanId: 'plan-1',
     toolSnapshotDigest: 'snap-1',
-    grant: { id: 'b2', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1', at: 1, expiresAt: Date.now() - 1000, maxOps: 300, used: 0 },
+    version: 'v1',
     degradedAt: 0,
-  };
-  const denied = gateDecision(old, 'pwsh', 'v1');
-  assert.equal(denied.allow, false, 'TTL 过了不许再放行');
-  assert.match(denied.reason, /授权已过期/);
-  assert.equal(old.grant, null, '失效的授权要被清掉，不能留着下回复活');
-
-  const heavy = {
-    enabled: true,
-    activePlanId: 'plan-1',
-    toolSnapshotDigest: 'snap-1',
-    grant: { id: 'b3', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1', at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 300, used: 300 },
-    degradedAt: 0,
-  };
-  const over = gateDecision(heavy, 'write', 'v1', Date.now(), { trusted: true });
-  assert.equal(over.allow, false, '用量到上限必须续期或重新 plan');
-  // v4 M2：额度用完但还能续 → 引导续期，而不是"再也干不了活"；累计额度与总期限不重置。
-  assert.equal(over.why, 'needs-renewal');
-  assert.match(over.reason, /需要续期/);
-  assert.match(over.reason, /累计用量：300\/600/);
-
-  // 续期次数用尽 → 直接作废，必须重新 plan 开新计划。
-  const exhausted = {
-    enabled: true,
-    activePlanId: 'plan-1',
-    toolSnapshotDigest: 'snap-1',
     grant: {
-      id: 'b4', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1',
-      at: Date.now(), expiresAt: Date.now() + 60000, maxOps: 300, used: 300,
-      renewalCount: 3, maxRenewals: 3, totalUsed: 300, totalOpsLimit: 600,
-      totalDeadline: Date.now() + 3600000, lastActivityAt: Date.now(),
+      id: 'b2',
+      planId: 'plan-1',
+      version: 'v1',
+      digest: 'd'.repeat(64),
+      toolSnapshotDigest: 'snap-1',
+      at: Date.now(),
+      expiresAt: Date.now() + 60000,
+      totalDeadline: Date.now() + 3600000,
+      maxOps: 300,
+      used: 0,
+      totalOpsLimit: 600,
+      totalUsed: 0,
+      renewalCount: 0,
+      maxRenewals: 3,
+      idleTimeout: 1800000,
+      lastActivityAt: Date.now(),
+      ...grantPatch,
     },
-    degradedAt: 0,
-  };
+  });
+
+  const expired = mk({ expiresAt: Date.now() - 1000 });
+  const denied = gateDecision(expired, 'pwsh', 'v1', Date.now(), { trusted: true });
+  assert.equal(denied.allow, false, 'TTL 过了不许再放行');
+  assert.equal(denied.reason, 'grant-expired');
+  assert.equal(expired.grant, null, '失效的授权要被清掉，不能留着下回复活');
+
+  const tired = mk({ used: 300 });
+  const needRenew = gateDecision(tired, 'write', 'v1', Date.now(), { trusted: true });
+  assert.equal(needRenew.allow, false, '用量到上限必须续期或重新 plan');
+  assert.equal(needRenew.why, 'needs-renewal', '额度用完但还能续时要引导续期');
+  assert.match(needRenew.message, /advisor_renew/);
+
+  const exhausted = mk({ used: 300, renewalCount: 3 });
   const dead = gateDecision(exhausted, 'write', 'v1', Date.now(), { trusted: true });
   assert.equal(dead.allow, false);
+  assert.equal(dead.reason, 'quota-exhausted');
   assert.equal(exhausted.grant, null, '续期用尽必须作废授权');
-  assert.match(dead.reason, /续期次数已用完/);
 });
 
 test('笔记目录里的写入不改版本指纹（否则插件自己会作废刚拿到的 GO）', async () => {

@@ -97,12 +97,26 @@
 | --- | --- | --- |
 | 要不要评审 | `enabled` | 用户开关，跟会话走 |
 | 走到哪一步 | `phase` | `idle` → `planning` → `executing` →（review GO）`delivering`；HOLD/NO-GO → `paused` |
-| 现在能写什么 | `grant`（执行许可）/ `finalizePermit`（收尾许可） | 执行许可按批次签发；收尾许可只允许提交与文档，用完即焚 |
+| 现在能写什么 | `grant`（执行许可）/ `finalizePermit`（收尾许可） | 执行许可按批次签发；收尾许可只允许用 `advisor_finalize_note` 新建文档，用完即焚 |
 
 - **`paused` 不是"被否决"**：它表示本批执行暂停、需要按意见改完方案后重新 `advisor_plan`。拒绝文案里明确写了这句话，并禁止"重试同一个调用"。
 - **续期不重置累计额度**：`advisor_renew` 只在闲置超时/额度用完、且 `renewalCount < maxRenewals`（默认 3）、`totalUsed < totalOpsPerPlan`（默认 600）、未过 `totalDeadline`（默认 4 小时）时可用；续期只顺延时间与当前窗口额度。
-- **收尾许可**：review GO 之后签发，只放行 `git status|diff|log|add|commit` 与 `docs/`、`gpt-notes/`、`README/CHANGELOG/AGENTS.md` 的写入，默认 5 次 / 10 分钟，用完即焚。
+- **收尾许可（v10，插件零 Git）**：review GO 之后签发，只放行一个工具 `advisor_finalize_note({ path, content })`，且路径必须落在 `docs/` 或 `gpt-notes/` 之下、只允许新建（`wx`，已存在就拒），默认 3 次 / 10 分钟，用完即焚。**插件不再执行任何 git 命令**——`git add` / `git commit` 请在关掉开关后自己执行；收尾阶段调 `pwsh` 会被拒，理由里写明了这一点。
+- **收尾写入的路径校验**：`trustedRoots()` 先 `lstat`（符号链接 / 不是目录 / 不存在都拒），`realpath` 后只校验「名字对得上」+「两个根同一父目录」，写入时再核父目录 realpath 落在授权根内，写完复核一次，父目录被换掉就删掉刚写的文件并报错。这样能挡住 junction 把 `docs` 指到别处，也不会被 Windows 8.3 短路径（`ADMINI~1`）误判。
 - **写入日志（journal）**：每个被放行的写操作记 `planId / 工具 / 目标路径 / 前后版本`，`/state.journal` 可查；`journalAudit()` 会指出"不属于当前计划"的条目——它不阻断，但让计划外改动变成可发现的事实。
+
+### 唯一授权审计（`GET /api/advisor-toggle/isolation`）
+
+收尾阶段最容易出的错不是"忘了拦"，而是**拦漏了**：新装的插件带进来一个写工具，`READ_ONLY` 名单里没有它，它就被放行了。`/isolation` 用**生产注册表**回答这个问题：
+
+- 取 `tools.definitions(scope)`（真实注册表，不是测试 fixture），对每个工具跑一次真实的 `gateDecision()`，探针状态是"收尾阶段 + 已签发收尾许可"。
+- 返回 `total / readOnlyCount / allowed / allowedWritable / deniedCount / deniedSample / finalizePresent / finalizeAllowed / uniqueWritableAllow / ok`。
+- **`uniqueWritableAllow` 只针对可写工具**：只读工具本来就该放行（它们不写文件、不执行命令），把它们算进"唯一"会把门禁说成"连 read 都不许"，结论就假了。所以放行的只读工具在 `allowed` 里如实列出，唯一性只在 `allowedWritable` 上判定。
+- `?scope=root|session` 可选，其它值 400；接口只读，不改 permit / phase / finalize 状态。
+
+真机实测（116 个工具）：`readOnlyCount=19`、`deniedCount=96`、`allowedWritable=['advisor_finalize_note']`、`uniqueWritableAllow=true`、`ok=true`。
+
+验收演练用的两个开关（`devExtraTool` / `devDisableFinalizeTool`）**必须同时满足 `DSH_ADVISOR_DEV=1`** 才生效（`devFlags()`）——只把配置写成 `true` 不算数，所以生产 profile 里即使有人抄了配置也开不出假工具、摘不掉收尾工具。
 
 ## 已实现 / 未实现
 

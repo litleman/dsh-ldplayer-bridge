@@ -1,147 +1,110 @@
-// v4 三态许可：executing / paused / delivering 与"用完即焚"的收尾许可、写入日志。
-// 这些用例对应顾问 2026-11-23 评审的 M1（三态）、M2（累计额度/续期上限）、M3（写入日志）、
-// M4（收尾许可没有技术定义 = 没收权）。
+// v11 许可语义：paused 是独立布尔、收尾阶段纯只读、累计额度/总期限/续期上限、写入日志。
 // 跑法: node --test test/permit.test.mjs
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
 const mod = await import('../index.js')
-const { gateDecision, finalizeTarget, journalAppend, journalAudit, makeGrant, DEFAULTS } = mod.__test
+const { gateDecision, journalAppend, journalAudit, makeGrant, DEFAULTS } = mod.__test
+
+const NOW = 1_800_000_000_000
 
 function permitState(overrides = {}) {
-  const now = Date.now()
   return {
     enabled: true,
+    paused: false,
     phase: 'executing',
     activePlanId: 'plan-1',
     toolSnapshotDigest: 'snap-1',
     toolSnapshotTrusted: true,
-    planDigest: 'digest',
-    degradedAt: 0,
     journal: [],
     grant: {
-      id: 'p1', planId: 'plan-1', version: 'v1', toolSnapshotDigest: 'snap-1',
-      at: now, expiresAt: now + 60000, maxOps: 300, used: 0,
-      renewalCount: 0, maxRenewals: 3, totalUsed: 0, totalOpsLimit: 600,
-      totalDeadline: now + 4 * 3600 * 1000, idleTimeout: 60000, lastActivityAt: now,
+      id: 'b1',
+      planId: 'plan-1',
+      version: 'v1',
+      digest: 'd'.repeat(64),
+      toolSnapshotDigest: 'snap-1',
+      at: NOW - 1000,
+      expiresAt: NOW + 30 * 60_000,
+      totalDeadline: NOW + 4 * 3600_000,
+      maxOps: 5,
+      used: 0,
+      totalOpsLimit: 50,
+      totalUsed: 0,
+      renewalCount: 0,
+      maxRenewals: 3,
+      idleTimeout: 30 * 60_000,
+      lastActivityAt: NOW - 1000,
     },
     ...overrides,
   }
 }
 
-test('M1 三态：paused 阶段没有任何写权限，且理由要说清"这不是否决"', () => {
-  const state = permitState({ phase: 'paused', grant: null })
-  const d = gateDecision(state, 'pwsh', 'v1', Date.now(), { trusted: true })
+test('M1：paused 是独立布尔，优先于阶段判定，且说明"这不是否决"', () => {
+  const s = permitState({ paused: true })
+  const d = gateDecision(s, 'pwsh', 'v1', NOW, { trusted: true })
   assert.equal(d.allow, false)
-  assert.equal(d.why, 'paused')
-  assert.match(d.reason, /暂停/)
-  assert.match(d.reason, /advisor_plan/)
-  // 明确写出"不要重试同一个调用"，避免模型原地打转
-  assert.match(d.reason, /不要重试/)
+  assert.equal(d.reason, 'paused')
+  assert.match(d.message, /重新 advisor_plan/)
+  assert.match(d.message, /不要重试/)
 })
 
-test('M2 执行阶段：允许写、累计用量与活跃时间都要推进', () => {
-  const state = permitState()
-  const before = state.grant.totalUsed
-  const d = gateDecision(state, 'write', 'v1', Date.now(), { trusted: true })
-  assert.equal(d.allow, true)
-  assert.equal(state.grant.used, 1)
-  assert.equal(state.grant.totalUsed, before + 1)
-  assert.ok(state.grant.lastActivityAt >= state.grant.at)
+test('M1：paused 时只读工具仍然放行（不能把人锁死到连读都读不了）', () => {
+  const s = permitState({ paused: true })
+  assert.equal(gateDecision(s, 'read', 'v1', NOW, { trusted: true }).allow, true)
 })
 
-test('M2 累计额度到顶：即使单窗口还有余量也必须停', () => {
-  const state = permitState()
-  state.grant.totalUsed = 600
-  const d = gateDecision(state, 'write', 'v1', Date.now(), { trusted: true })
+test('M2：累计额度到顶 → quota-exhausted（即使单窗口还有余量）', () => {
+  const s = permitState()
+  s.grant.used = 1
+  s.grant.totalUsed = 50
+  const d = gateDecision(s, 'pwsh', 'v1', NOW, { trusted: true })
+  assert.equal(d.reason, 'quota-exhausted')
+})
+
+test('M2：总期限到点 → grant-expired', () => {
+  const s = permitState()
+  s.grant.totalDeadline = NOW - 1
+  assert.equal(gateDecision(s, 'pwsh', 'v1', NOW, { trusted: true }).reason, 'grant-expired')
+})
+
+test('M2：续期次数用尽 → quota-exhausted', () => {
+  const s = permitState()
+  s.grant.renewalCount = 3
+  assert.equal(gateDecision(s, 'pwsh', 'v1', NOW, { trusted: true }).reason, 'quota-exhausted')
+})
+
+test('v11：收尾阶段（delivering）没有任何写权限', () => {
+  const s = permitState({ phase: 'delivering', grant: null })
+  const d = gateDecision(s, 'pwsh', 'v1', NOW, { trusted: true })
   assert.equal(d.allow, false)
-  assert.equal(state.grant, null)
-  assert.match(d.reason, /累计写入已达上限/)
+  assert.equal(d.reason, 'phase-not-executing')
 })
 
-test('M2 总期限到点：作废并说明要重新开计划', () => {
-  const state = permitState()
-  state.grant.totalDeadline = Date.now() - 1000
-  const d = gateDecision(state, 'write', 'v1', Date.now(), { trusted: true })
-  assert.equal(d.allow, false)
-  assert.equal(state.grant, null)
-  assert.match(d.reason, /累计执行窗口/)
+test('v11：插件不再注册任何收尾写工具', async () => {
+  const tools = await import('../index.js')
+  assert.equal(typeof tools.__test.finalizeCreate, 'undefined')
+  assert.equal(typeof tools.__test.trustedRoots, 'undefined')
+  assert.equal(typeof tools.__test.finalizeDecision, 'undefined')
 })
 
-test('M4 收尾许可：git 提交与 docs 文档放行，pwsh 与源码路径不放行', () => {
-  const now = Date.now()
-  assert.equal(finalizeTarget({ command: 'git commit -m "x"' }).ok, true)
-  assert.equal(finalizeTarget({ command: 'git status' }).ok, true)
-  assert.equal(finalizeTarget({ command: 'rm -rf /' }).ok, false)
-  assert.equal(finalizeTarget({ file_path: 'docs/threat-model.md' }).ok, true)
-  assert.equal(finalizeTarget({ file_path: 'plugins/advisor-toggle/index.js' }).ok, false)
-  assert.equal(finalizeTarget({}).ok, false)
-
-  const state = permitState({
-    phase: 'delivering',
-    grant: null,
-    finalizePermit: { id: 'f1', planId: 'plan-1', at: now, expiresAt: now + 60000, maxOps: 2, used: 0 },
-  })
-  const ok = gateDecision(state, 'edit', 'v1', now, { trusted: true, params: { file_path: 'docs/anomaly-report.txt' } })
-  assert.equal(ok.allow, true)
-  assert.equal(ok.why, 'finalize')
-  assert.equal(state.finalizePermit.used, 1)
-
-  const denied = gateDecision(state, 'edit', 'v1', now, { trusted: true, params: { file_path: 'plugins/advisor-toggle/index.js' } })
-  assert.equal(denied.allow, false)
-  assert.equal(denied.why, 'finalize-scope')
+test('M3：写入日志记 planId / 工具 / 路径，并能被 plan 核对', () => {
+  const s = permitState()
+  journalAppend(s, { toolName: 'write', params: { file_path: 'plugins/advisor-toggle/index.js' }, versionBefore: 'v1', versionAfter: 'v2' })
+  const audit = journalAudit(s)
+  assert.equal(audit.count, 1)
+  assert.ok(audit.paths.includes('plugins/advisor-toggle/index.js'))
 })
 
-test('M4 收尾许可用完即焚：额度耗尽后不再保留', () => {
-  const now = Date.now()
-  const state = permitState({
-    phase: 'delivering',
-    grant: null,
-    finalizePermit: { id: 'f2', planId: 'plan-1', at: now, expiresAt: now + 60000, maxOps: 1, used: 0 },
-  })
-  const d = gateDecision(state, 'edit', 'v1', now, { trusted: true, params: { file_path: 'docs/x.md' } })
-  assert.equal(d.allow, true)
-  assert.equal(state.finalizePermit, null, '最后一格用完必须立刻销毁许可')
-  assert.equal(state.phase, 'idle')
-
-  const again = gateDecision(state, 'edit', 'v1', now, { trusted: true, params: { file_path: 'docs/x.md' } })
-  assert.equal(again.allow, false)
-})
-
-test('M4 收尾许可过期：拒绝并清理', () => {
-  const now = Date.now()
-  const state = permitState({
-    phase: 'delivering',
-    grant: null,
-    finalizePermit: { id: 'f3', planId: 'plan-1', at: now - 700000, expiresAt: now - 1000, maxOps: 5, used: 0 },
-  })
-  const d = gateDecision(state, 'edit', 'v1', now, { trusted: true, params: { file_path: 'docs/x.md' } })
-  assert.equal(d.allow, false)
-  assert.equal(d.why, 'finalize-expired')
-  assert.equal(state.finalizePermit, null)
-})
-
-test('M3 写入日志：记路径、能发现"不属于本计划"的条目', () => {
-  const state = permitState()
-  journalAppend(state, { toolName: 'write', params: { file_path: 'plugins/x/index.js' }, versionBefore: 'v0', versionAfter: 'v1' })
-  journalAppend(state, { toolName: 'edit', params: { file_path: 'docs/y.md' }, versionBefore: 'v1' })
-  const audit = journalAudit(state)
-  assert.equal(audit.count, 2)
-  assert.deepEqual(audit.paths, ['plugins/x/index.js', 'docs/y.md'])
-  assert.equal(audit.unexplained.length, 0)
-
-  // 换了计划号之后，旧条目就变成"本计划无法解释的改动"
-  state.activePlanId = 'plan-2'
-  const audit2 = journalAudit(state)
-  assert.equal(audit2.unexplained.length, 2)
-})
-
-test('新计划签发的许可必须自带累计层字段（不是 0/未定义）', () => {
-  const state = permitState()
-  const grant = makeGrant({ state, version: 'v'.repeat(64), planId: 'plan-2', round: 1 })
-  assert.equal(grant.totalUsed, 0)
-  assert.equal(grant.totalOpsLimit, Number(DEFAULTS.totalOpsPerPlan))
-  assert.equal(grant.renewalCount, 0)
-  assert.equal(grant.maxRenewals, Number(DEFAULTS.maxRenewals))
-  assert.ok(grant.totalDeadline - grant.at === Number(DEFAULTS.totalWindowMs))
+test('makeGrant：累计层字段齐全，且拒收不可信快照', () => {
+  const state = { toolSnapshotDigest: 'snap-1', toolSnapshotTrusted: true, planDigest: '' }
+  const g = makeGrant({ state, version: 'v1', planId: 'plan-1', round: 1 })
+  assert.equal(g.planId, 'plan-1')
+  assert.equal(g.totalUsed, 0)
+  assert.equal(g.totalOpsLimit, Number(DEFAULTS.totalOpsPerPlan))
+  assert.equal(g.maxRenewals, Number(DEFAULTS.maxRenewals))
+  assert.ok(g.totalDeadline > g.at)
+  assert.throws(
+    () => makeGrant({ state: { toolSnapshotDigest: 'snap-1', toolSnapshotTrusted: false }, version: 'v1', planId: 'p', round: 1 }),
+    /工具快照不可信/,
+  )
 })

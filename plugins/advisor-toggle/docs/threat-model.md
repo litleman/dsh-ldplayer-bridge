@@ -79,3 +79,21 @@
 | 日期 | 版本 | 接受人 | 范围 | 复查条件 |
 |------|------|--------|------|----------|
 | 2026-11-18 | `295fbac` 前后 | 用户（对话中确认） | 第 5 节 1–7 全部 | harness 提供"结束回合"级 hook、或出现真实绕过事故时重评 |
+
+## 8. v10 收尾许可（2026-11-23）
+
+顾问在这一轮要求「review GO 后的最后一次写必须有技术定义」，同时指出 v0.4 的两个真问题：收尾许可用正则放行 `git` 命令等于把 shell 交给插件；`docs/../../plugins/x` 这类路径能靠字面正则绕过。处置：
+
+- **插件零 Git**：删掉 `FINALIZE_COMMAND_RE` 与所有 `spawn('git' …)` 分支（测试 `插件零 Git：源码里不存在 spawn('git' 或 execFile('git'` 守着）。收尾阶段只允许 `advisor_finalize_note`，其他工具（含 `pwsh`、`edit`）一律拒绝，理由里写明「提交请自行在开关关闭后进行」。因此**执行阶段 git 带来的仓库级风险不由门禁防御**——门禁只保证"这个文件是顾问看过的那一版"。
+- **路径判定改结构化**：`relUnderRoot()` 按分隔符拆段，拒绝绝对路径、盘符、`.`、`..`、段数不足；`trustedRoots()` 用 `lstat` 先判符号链接再判目录，`realpath` 后只比 basename 与两根的共同父目录。**父目录替换窗口**：写入前后各核一次父目录 realpath，被换掉就 `unlink` 并报错；窗口内仍可能被换（毫秒级），这是接受的残余风险。
+- **Windows 8.3 短路径**：`C:\Users\ADMINI~1\…` 与 `C:\Users\Administrator\…` 指向同一位置但字面不等，因此禁止整串字面比较，只比 basename / 父目录一致性（实测踩过，见 `test/finalize-scope.test.mjs`）。
+- **只新建、不覆盖**：`open(path, 'wx')`，已存在即拒，避免拿收尾许可改写既有文档。
+
+## 9. 唯一授权审计与演练开关隔离（2026-11-23，P0）
+
+顾问在验收 `e151c69` 时提了两条 P0，都已落地：
+
+- **P0-1 指标名与语义**：原字段 `uniqueAllow` 实际只对"可写工具"谈唯一，名字会让人以为连只读工具都被拒。已全量改名为 `uniqueWritableAllow`（base 字段、`ok` 表达式、测试、README 一致），并在 README 里写明"只读工具按设计放行，所以唯一性只在 `allowedWritable` 上判定"。审计接口 `GET /api/advisor-toggle/isolation` 同时返回 `allowed`（含只读）与 `allowedWritable`（可写子集），避免用单一布尔值掩盖"到底谁被放行"。
+- **P0-2 演练开关的环境隔离**：`devExtraTool` / `devDisableFinalizeTool` 原来只靠默认 `false` 保证生产安全，而 profile 的 config 可以把它写开——"默认关"不等于"生产不能开"。现在两个开关都必须满足 `DSH_ADVISOR_DEV=1`（见 `devFlags()`）才生效；`apply()` 里复位与注册逻辑共用同一判定，配置写成 `true` 但在生产环境不会注册假工具、也不会摘掉收尾工具。测试 `test/isolation.test.mjs` 覆盖四态：env 未设→配置开也 false；env=1 且配置开→true；env=1 但配置没开→false；`allowed` 必须包含只读工具。
+
+**残余风险**：`DSH_ADVISOR_DEV=1` 是进程级环境变量，任何能改环境的人都能打开演练开关——但它只能改"注册出来的工具集合"，而 `/isolation` 会把这种改变如实报出来（`total` 变化、假工具出现在 `deniedSample`），因此它是一次可发现的篡改，不是静默绕过。

@@ -23,3 +23,6 @@
         requireClientNonce: false
         autoRecover: true
         deliveryReminder: true
+        # 下面是验收演练开关，默认必须 false，生产不要动。
+        devExtraTool: false
+        devDisableFinalizeTool: false
